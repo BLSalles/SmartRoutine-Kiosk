@@ -288,3 +288,23 @@ body{
 .pay-pill{ color:#fff; }
 .badge-sr{ color:#fff; }
 .alert{ color:#0b1220; } /* mantém alert legível (bootstrap) */
+
+
+/* ===== Kiosk Bottom Bar (Cliente Menu) ===== */
+.kiosk-bottom-bar{
+  position: sticky;
+  bottom: 0;
+  z-index: 30;
+  padding: 14px 0;
+  background: linear-gradient(180deg, rgba(8,17,32,0), rgba(8,17,32,.92) 35%, rgba(8,17,32,.98));
+  backdrop-filter: blur(10px);
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+@media (min-width: 992px){
+  .kiosk-bottom-bar{
+    position: fixed;
+    left: 0; right: 0;
+    bottom: 0;
+  }
+  body{ padding-bottom: 92px; }
+}

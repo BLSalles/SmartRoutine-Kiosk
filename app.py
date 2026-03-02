@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 APP_TITLE = "SmartRoutine • Kiosk"
 
@@ -70,6 +70,9 @@ def create_app():
     with app.app_context():
         db.create_all()
         ensure_schema_for_sqlite(app.config["SQLALCHEMY_DATABASE_URI"])
+
+        if not app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite"):
+            ensure_schema_for_postgres()
         seed_if_empty()
 
     def role_required(role: str):
@@ -506,6 +509,29 @@ class Expense(db.Model):
     description = db.Column(db.String(120), nullable=False)
     amount = db.Column(db.Float, nullable=False)
 
+
+
+def ensure_schema_for_postgres():
+    """
+    Migração leve para Postgres (Render) quando o banco já existe.
+    create_all NÃO adiciona colunas novas em tabelas existentes.
+    """
+    try:
+        stmts = [
+            'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS is_paid BOOLEAN DEFAULT FALSE',
+            'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS payment_method VARCHAR(20)',
+            'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP',
+            'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS customer_cpf_hash VARCHAR(64)',
+            'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS customer_cpf_last4 VARCHAR(4)',
+            'CREATE INDEX IF NOT EXISTS ix_order_created_at ON "order" (created_at)',
+            'CREATE INDEX IF NOT EXISTS ix_order_customer_cpf_hash ON "order" (customer_cpf_hash)',
+        ]
+        for s in stmts:
+            db.session.execute(text(s))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        pass
 
 def ensure_schema_for_sqlite(db_uri: str):
     if not (db_uri or "").startswith("sqlite"):
