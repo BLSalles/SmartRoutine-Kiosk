@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func, text
+from sqlalchemy import func, text, text
 
 APP_TITLE = "SmartRoutine • Kiosk"
 
@@ -323,7 +323,15 @@ def create_app():
         if status_filter:
             q = q.filter(Order.status == status_filter)
         orders = q.limit(50).all()
-        return render_template("cozinha.html", title="Cozinha", orders=orders, status_filter=status_filter, cart=cart_get(), last_order_id=last_order_id())
+
+        order_ids = [o.id for o in orders]
+        items = []
+        if order_ids:
+            items = OrderItem.query.filter(OrderItem.order_id.in_(order_ids)).all()
+        order_items_map = {}
+        for it in items:
+            order_items_map.setdefault(it.order_id, []).append(it)
+        return render_template("cozinha.html", title="Cozinha", orders=orders, order_items_map=order_items_map, status_filter=status_filter, cart=cart_get(), last_order_id=last_order_id())
 
     @app.route("/cozinha/pedido/<int:order_id>/status", methods=["POST"])
     @role_required("cozinha")
