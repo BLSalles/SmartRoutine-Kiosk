@@ -1,5 +1,7 @@
 import os
+import re
 import sqlite3
+import hashlib
 from datetime import datetime, date
 from decimal import Decimal
 
@@ -12,11 +14,46 @@ APP_TITLE = "SmartRoutine • Kiosk"
 db = SQLAlchemy()
 
 
+def _normalize_cpf(cpf_raw: str) -> str:
+    return re.sub(r"\D+", "", cpf_raw or "")
+
+
+def _cpf_hash(cpf_digits: str, secret: str) -> str:
+    data = (secret + ":" + cpf_digits).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+def _is_valid_cpf(cpf_digits: str) -> bool:
+    """Valida CPF com dígitos verificadores (DV). Espera 11 dígitos."""
+    if not cpf_digits or len(cpf_digits) != 11:
+        return False
+    # Rejeita sequências (000..., 111..., etc.)
+    if cpf_digits == cpf_digits[0] * 11:
+        return False
+
+    def calc_digit(digs: str, factor: int) -> str:
+        total = 0
+        for ch in digs:
+            total += int(ch) * factor
+            factor -= 1
+        r = (total * 10) % 11
+        if r == 10:
+            r = 0
+        return str(r)
+
+    d1 = calc_digit(cpf_digits[:9], 10)
+    d2 = calc_digit(cpf_digits[:9] + d1, 11)
+    return cpf_digits[-2:] == d1 + d2
+
+
 def create_app():
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-change-me")
     app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL", "sqlite:///app.db")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+    # Show demo credentials only if explicitly enabled
+    app.config["SHOW_DEMO_CREDENTIALS"] = os.environ.get("SHOW_DEMO_CREDENTIALS", "false").lower() in {"1", "true", "yes", "y"}
 
     # Put relative sqlite db inside instance/
     if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite:///") and "://" not in app.config["SQLALCHEMY_DATABASE_URI"][10:]:
@@ -24,16 +61,17 @@ def create_app():
         os.makedirs(app.instance_path, exist_ok=True)
         app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + db_path.replace("\\", "/")
 
+    # Normalize postgres scheme
+    if app.config["SQLALCHEMY_DATABASE_URI"].startswith("postgres://"):
+        app.config["SQLALCHEMY_DATABASE_URI"] = app.config["SQLALCHEMY_DATABASE_URI"].replace("postgres://", "postgresql://", 1)
+
     db.init_app(app)
 
     with app.app_context():
         db.create_all()
-        ensure_schema_for_sqlite()
+        ensure_schema_for_sqlite(app.config["SQLALCHEMY_DATABASE_URI"])
         seed_if_empty()
 
-    # ----------------------------
-    # Helpers
-    # ----------------------------
     def role_required(role: str):
         def decorator(fn):
             def wrapper(*args, **kwargs):
@@ -63,6 +101,9 @@ def create_app():
 
     def last_order_id():
         return session.get("last_order_id")
+
+    def session_cpf_hash():
+        return session.get("cpf_hash")
 
     # ----------------------------
     # Landing / auth
@@ -160,11 +201,19 @@ def create_app():
         if request.method == "POST":
             customer_name = (request.form.get("customer_name") or "").strip()[:60]
             table_number = (request.form.get("table_number") or "").strip()[:10]
+            cpf_raw = (request.form.get("customer_cpf") or "").strip()
+
+            cpf_digits = _normalize_cpf(cpf_raw)
             if not customer_name:
                 flash("Informe seu nome.", "danger")
                 return redirect(url_for("cliente_checkout"))
+            if not _is_valid_cpf(cpf_digits):
+                flash("Informe um CPF válido.", "danger")
+                return redirect(url_for("cliente_checkout"))
 
             total_dec = cart_total(cart)
+            cpf_h = _cpf_hash(cpf_digits, app.config["SECRET_KEY"])
+            cpf_last4 = cpf_digits[-4:]
 
             order = Order(
                 created_at=datetime.utcnow(),
@@ -175,6 +224,8 @@ def create_app():
                 is_paid=False,
                 payment_method=None,
                 paid_at=None,
+                customer_cpf_hash=cpf_h,
+                customer_cpf_last4=cpf_last4,
             )
             db.session.add(order)
             db.session.flush()
@@ -193,33 +244,63 @@ def create_app():
 
             cart_set({})
             session["last_order_id"] = order.id
+            session["cpf_hash"] = cpf_h
+            session.modified = True
+
             flash("Pedido enviado para a cozinha! Você pode acompanhar o andamento.", "success")
             return redirect(url_for("cliente_status", order_id=order.id))
 
         total = float(cart_total(cart))
         return render_template("cliente_checkout.html", title="Checkout", total=total, cart=cart_get(), last_order_id=last_order_id())
 
-    @app.route("/cliente/pedido")
+    @app.route("/cliente/pedido", methods=["GET"])
     def cliente_acompanhar():
-        # If user already has a last order id in session, redirect
-        oid = request.args.get("id") or session.get("last_order_id")
-        if oid:
-            try:
-                return redirect(url_for("cliente_status", order_id=int(oid)))
-            except Exception:
-                pass
         return render_template("cliente_acompanhar.html", title="Acompanhar pedido", cart=cart_get(), last_order_id=last_order_id())
+
+    @app.route("/cliente/pedido/buscar", methods=["POST"])
+    def cliente_acompanhar_buscar():
+        cpf_digits = _normalize_cpf(request.form.get("customer_cpf") or "")
+        if not _is_valid_cpf(cpf_digits):
+            flash("Informe um CPF válido.", "danger")
+            return redirect(url_for("cliente_acompanhar"))
+
+        cpf_h = _cpf_hash(cpf_digits, app.config["SECRET_KEY"])
+        session["cpf_hash"] = cpf_h
+        session.modified = True
+
+        orders = Order.query.filter(Order.customer_cpf_hash == cpf_h).order_by(Order.created_at.desc()).limit(10).all()
+        if not orders:
+            flash("Nenhum pedido encontrado para este CPF.", "warning")
+            return redirect(url_for("cliente_acompanhar"))
+
+        return render_template("cliente_lista_pedidos.html", title="Seus pedidos", orders=orders, cart=cart_get(), last_order_id=last_order_id())
+
+    @app.route("/cliente/pedido/sair", methods=["POST"])
+    def cliente_sair_cpf():
+        session.pop("cpf_hash", None)
+        flash("CPF removido. Informe novamente para acompanhar seus pedidos.", "info")
+        return redirect(url_for("cliente_acompanhar"))
+
 
     @app.route("/cliente/pedido/<int:order_id>")
     def cliente_status(order_id):
         order = Order.query.get_or_404(order_id)
+
+        cpf_h = session_cpf_hash()
+        if not cpf_h or cpf_h != order.customer_cpf_hash:
+            flash("Para ver este pedido, informe seu CPF.", "warning")
+            return redirect(url_for("cliente_acompanhar"))
+
         items = OrderItem.query.filter_by(order_id=order.id).all()
         return render_template("cliente_status.html", title="Status do pedido", order=order, items=items, cart=cart_get(), last_order_id=last_order_id())
 
-    # API for polling status (client)
     @app.route("/api/pedido/<int:order_id>")
     def api_pedido(order_id):
         order = Order.query.get_or_404(order_id)
+        cpf_h = session_cpf_hash()
+        if not cpf_h or cpf_h != order.customer_cpf_hash:
+            return jsonify({"error": "unauthorized"}), 403
+
         return jsonify({
             "id": order.id,
             "status": order.status,
@@ -275,7 +356,6 @@ def create_app():
             flash("Mês inválido. Use YYYY-MM", "danger")
             return redirect(url_for("dono_dashboard"))
 
-        # Revenue: consider PAID orders as revenue (caixa)
         revenue = db.session.query(func.coalesce(func.sum(Order.total), 0.0)).filter(
             Order.created_at >= start,
             Order.created_at < end,
@@ -289,7 +369,6 @@ def create_app():
 
         profit = float(revenue) - float(expenses)
 
-        # Recent orders show table/name/total/payment
         recent_orders = Order.query.order_by(Order.created_at.desc()).limit(10).all()
         recent_expenses = Expense.query.order_by(Expense.date.desc(), Expense.id.desc()).limit(10).all()
 
@@ -390,9 +469,6 @@ def create_app():
     return app
 
 
-# ----------------------------
-# Models
-# ----------------------------
 class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
@@ -409,10 +485,12 @@ class Order(db.Model):
     status = db.Column(db.String(20), nullable=False, default="RECEBIDO")
     total = db.Column(db.Float, nullable=False, default=0.0)
 
-    # Caixa / pagamento
     is_paid = db.Column(db.Boolean, default=False)
-    payment_method = db.Column(db.String(20), nullable=True)  # PIX/CARTAO/DINHEIRO
+    payment_method = db.Column(db.String(20), nullable=True)
     paid_at = db.Column(db.DateTime, nullable=True)
+
+    customer_cpf_hash = db.Column(db.String(64), nullable=True, index=True)
+    customer_cpf_last4 = db.Column(db.String(4), nullable=True)
 
 class OrderItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -429,25 +507,16 @@ class Expense(db.Model):
     amount = db.Column(db.Float, nullable=False)
 
 
-# ----------------------------
-# SQLite schema helper (adds missing columns if you already have an old DB)
-# ----------------------------
-def ensure_schema_for_sqlite():
-    uri = db.engine.url
-    if uri.get_backend_name() != "sqlite":
+def ensure_schema_for_sqlite(db_uri: str):
+    if not (db_uri or "").startswith("sqlite"):
         return
-
-    db_path = uri.database
-    if not db_path or not os.path.exists(db_path):
+    path = db_uri.replace("sqlite:///", "", 1)
+    if not path or not os.path.exists(path):
         return
-
-    con = sqlite3.connect(db_path)
+    con = sqlite3.connect(path)
     cur = con.cursor()
-
     cur.execute("PRAGMA table_info('order')")
     cols = {row[1] for row in cur.fetchall()}
-
-    # add columns if missing
     alters = []
     if "is_paid" not in cols:
         alters.append("ALTER TABLE 'order' ADD COLUMN is_paid BOOLEAN DEFAULT 0")
@@ -455,25 +524,23 @@ def ensure_schema_for_sqlite():
         alters.append("ALTER TABLE 'order' ADD COLUMN payment_method VARCHAR(20)")
     if "paid_at" not in cols:
         alters.append("ALTER TABLE 'order' ADD COLUMN paid_at DATETIME")
-
+    if "customer_cpf_hash" not in cols:
+        alters.append("ALTER TABLE 'order' ADD COLUMN customer_cpf_hash VARCHAR(64)")
+    if "customer_cpf_last4" not in cols:
+        alters.append("ALTER TABLE 'order' ADD COLUMN customer_cpf_last4 VARCHAR(4)")
     for sql in alters:
         try:
             cur.execute(sql)
         except Exception:
             pass
-
     con.commit()
     con.close()
 
 
-# ----------------------------
-# Seed
-# ----------------------------
 def seed_if_empty():
     if Product.query.count() > 0:
         return
 
-    # Unsplash images (hotlink) - 10+ items.
     imgs = {
         "burger1": "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&fm=jpg&ixlib=rb-4.1.0&q=60&w=1200",
         "burger2": "https://images.unsplash.com/photo-1572802419224-296b0aeee0d9?auto=format&fit=crop&fm=jpg&ixlib=rb-4.1.0&q=60&w=1200",
@@ -503,13 +570,11 @@ def seed_if_empty():
     ]
     db.session.add_all(products)
 
-    # starter expenses
     today = date.today()
-    example_expenses = [
+    db.session.add_all([
         Expense(date=today.replace(day=1), description="Gás", amount=180.00),
         Expense(date=today.replace(day=min(5, today.day)), description="Embalagens", amount=120.00),
-    ]
-    db.session.add_all(example_expenses)
+    ])
     db.session.commit()
 
 

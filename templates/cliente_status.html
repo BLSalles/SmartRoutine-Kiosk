@@ -8,7 +8,7 @@
           <div>
             <div class="badge badge-sr mb-2">Pedido #{{ order.id }}</div>
             <h2 class="fw-black mb-1">{{ order.customer_name }}</h2>
-            <div class="text-white-60">Mesa: {{ order.table_number or "—" }}</div>
+            <div class="text-white-60">Mesa: {{ order.table_number or "—" }} • CPF: ***.***.***-{{ order.customer_cpf_last4 or "—" }}</div>
           </div>
           <div class="text-end">
             <div class="small text-white-60">Status</div>
@@ -37,9 +37,13 @@
           <div class="fs-3 fw-black">R$ {{ "%.2f"|format(order.total) }}</div>
         </div>
 
-        <div class="alert alert-info mt-4 mb-0">
-          Esta tela atualiza automaticamente (a cada 5s).
-        </div>
+        <div class="d-flex justify-content-between align-items-center mt-4">
+  <div id="liveAlert" class="alert alert-info mb-0 flex-grow-1 me-2">
+          Esta tela atualiza automaticamente (a cada 5s).</div>
+  <form method="post" action="{{ url_for('cliente_sair_cpf') }}">
+    <button type="submit" class="btn btn-outline-sr"><i class="bi bi-person-x me-1"></i>Trocar CPF</button>
+  </form>
+</div>
       </div>
     </div>
   </div>
@@ -52,21 +56,24 @@
   async function refreshStatus(){
     try{
       const res = await fetch(`/api/pedido/${orderId}`);
+      if(res.status === 403){
+        const a = document.getElementById("liveAlert");
+        a.className = "alert alert-warning mt-4 mb-0";
+        a.textContent = "Acesso negado. Informe seu CPF novamente para acompanhar este pedido.";
+        return;
+      }
       if(!res.ok) return;
       const data = await res.json();
 
-      const s = document.getElementById("statusPill");
-      s.textContent = data.status;
+      document.getElementById("statusPill").textContent = data.status;
 
       const p = document.getElementById("payPill");
       if(data.is_paid){
         p.textContent = "PAGO" + (data.payment_method ? ` • ${data.payment_method}` : "");
-        p.classList.add("paid");
-        p.classList.remove("unpaid");
+        p.classList.add("paid"); p.classList.remove("unpaid");
       }else{
         p.textContent = "PENDENTE";
-        p.classList.add("unpaid");
-        p.classList.remove("paid");
+        p.classList.add("unpaid"); p.classList.remove("paid");
       }
     }catch(e){}
   }

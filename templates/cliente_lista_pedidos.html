@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h2 class="fw-black mb-0">Seus pedidos</h2>
+    <div class="text-white-60">Mostrando os últimos pedidos encontrados para o CPF informado.</div>
+  </div>
+  <form method="post" action="{{ url_for('cliente_sair_cpf') }}" class="d-inline">
+    <button type="submit" class="btn btn-outline-sr"><i class="bi bi-person-x me-1"></i>Trocar CPF</button>
+  </form>
+</div>
+
+<div class="card card-panel shadow-soft">
+  <div class="table-responsive">
+    <table class="table table-darkish align-middle mb-0">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Data</th>
+          <th>Mesa</th>
+          <th>Status</th>
+          <th>Pagamento</th>
+          <th class="text-end">Total</th>
+          <th style="width:120px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in orders %}
+          <tr>
+            <td class="fw-bold">{{ o.id }}</td>
+            <td class="text-white-60">{{ o.created_at.strftime("%d/%m %H:%M") }} (UTC)</td>
+            <td>{{ o.table_number or "—" }}</td>
+            <td><span class="badge text-bg-dark">{{ o.status }}</span></td>
+            <td>
+              {% if o.is_paid %}
+                <span class="badge text-bg-success">PAGO</span>
+                <span class="small text-white-60">{{ o.payment_method or "" }}</span>
+              {% else %}
+                <span class="badge text-bg-warning">PENDENTE</span>
+              {% endif %}
+            </td>
+            <td class="text-end fw-bold text-white">R$ {{ "%.2f"|format(o.total) }}</td>
+            <td class="text-end">
+              <a class="btn btn-sm btn-sr" href="{{ url_for('cliente_status', order_id=o.id) }}">Acompanhar</a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="alert alert-info mt-3">
+  Por segurança, você só abre o pedido se o CPF informado for o mesmo do pedido.
+</div>
+{% endblock %}

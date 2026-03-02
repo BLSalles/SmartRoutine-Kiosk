@@ -29,4 +29,12 @@ Rotas:
 - A receita do painel do dono considera **apenas pedidos pagos** (registrados no Caixa).
 - Se você já rodou uma versão anterior, a aplicação tenta adicionar automaticamente as novas colunas no SQLite.
   Se der algum erro, apague o arquivo `instance/app.db` e rode novamente (vai recriar e seedar).
-# SmartRoutine-Kiosk
+
+
+## Acompanhamento por CPF
+- No checkout, o cliente informa CPF.
+- O sistema **não guarda o CPF puro**, apenas o **hash** + últimos 4 dígitos.
+- Para acompanhar, o cliente informa o CPF e vê apenas pedidos vinculados a ele.
+
+- Validação do CPF: inclui verificação dos dígitos (DV).
+- Botão 'Trocar CPF' limpa a sessão para evitar acesso por terceiros no mesmo dispositivo.
