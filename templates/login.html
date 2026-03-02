@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6 col-lg-5">
+    <div class="card card-panel shadow-soft">
+      <div class="card-body p-4">
+        <h3 class="fw-black mb-1"><i class="bi bi-shield-lock me-2"></i>Login: {{ role|upper }}</h3>
+        <p class="text-white-60 mb-4">Entre com o PIN para acessar o painel.</p>
+
+        <form method="post" class="vstack gap-3">
+          <div>
+            <label class="form-label">PIN</label>
+            <input class="form-control form-control-lg" name="pin" type="password" inputmode="numeric" autocomplete="off" required>
+          </div>
+
+          <button class="btn btn-sr btn-lg" type="submit">Entrar</button>
+          <a class="btn btn-ghost" href="{{ url_for('index') }}">Voltar</a>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

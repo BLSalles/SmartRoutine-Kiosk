@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <div class="card card-panel shadow-soft">
+      <div class="card-body p-4 p-lg-5">
+        <div class="d-flex justify-content-between align-items-start gap-3">
+          <div>
+            <div class="badge badge-sr mb-2">Pedido #{{ order.id }}</div>
+            <h2 class="fw-black mb-1">{{ order.customer_name }}</h2>
+            <div class="text-white-60">Mesa: {{ order.table_number or "—" }}</div>
+          </div>
+          <div class="text-end">
+            <div class="small text-white-60">Status</div>
+            <div id="statusPill" class="status-pill">{{ order.status }}</div>
+            <div class="small text-white-60 mt-2">Pagamento</div>
+            <div id="payPill" class="pay-pill {% if order.is_paid %}paid{% else %}unpaid{% endif %}">
+              {% if order.is_paid %}PAGO{% else %}PENDENTE{% endif %}
+            </div>
+          </div>
+        </div>
+
+        <hr class="my-4 border-white-10">
+
+        <h5 class="fw-bold mb-3">Itens</h5>
+        <ul class="list-group list-group-dark mb-4">
+          {% for it in items %}
+            <li class="list-group-item d-flex justify-content-between">
+              <div>{{ it.qty }}x {{ it.product.name }}</div>
+              <div class="text-white-60">R$ {{ "%.2f"|format(it.unit_price) }}</div>
+            </li>
+          {% endfor %}
+        </ul>
+
+        <div class="d-flex justify-content-between align-items-center">
+          <div class="fs-5 text-white-60">Total</div>
+          <div class="fs-3 fw-black">R$ {{ "%.2f"|format(order.total) }}</div>
+        </div>
+
+        <div class="alert alert-info mt-4 mb-0">
+          Esta tela atualiza automaticamente (a cada 5s).
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const orderId = {{ order.id }};
+  async function refreshStatus(){
+    try{
+      const res = await fetch(`/api/pedido/${orderId}`);
+      if(!res.ok) return;
+      const data = await res.json();
+
+      const s = document.getElementById("statusPill");
+      s.textContent = data.status;
+
+      const p = document.getElementById("payPill");
+      if(data.is_paid){
+        p.textContent = "PAGO" + (data.payment_method ? ` • ${data.payment_method}` : "");
+        p.classList.add("paid");
+        p.classList.remove("unpaid");
+      }else{
+        p.textContent = "PENDENTE";
+        p.classList.add("unpaid");
+        p.classList.remove("paid");
+      }
+    }catch(e){}
+  }
+  refreshStatus();
+  setInterval(refreshStatus, 5000);
+</script>
+{% endblock %}

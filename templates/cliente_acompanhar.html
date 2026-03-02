@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <div class="card card-panel shadow-soft">
+      <div class="card-body p-4 p-lg-5">
+        <div class="d-flex align-items-center gap-3 mb-2">
+          <div class="icon-badge"><i class="bi bi-receipt"></i></div>
+          <div>
+            <h2 class="fw-black mb-0">Acompanhar pedido</h2>
+            <div class="text-white-60">Digite o número do pedido (ou continue no último pedido do seu dispositivo).</div>
+          </div>
+        </div>
+
+        {% if last_order_id %}
+          <div class="alert alert-info mt-3">
+            Último pedido neste dispositivo: <b>#{{ last_order_id }}</b>
+            <a class="btn btn-sr btn-sm ms-2" href="{{ url_for('cliente_status', order_id=last_order_id) }}">Ver status</a>
+          </div>
+        {% endif %}
+
+        <form class="mt-3" method="get" action="{{ url_for('cliente_acompanhar') }}">
+          <div class="row g-2 align-items-end">
+            <div class="col-md-8">
+              <label class="form-label">Número do pedido</label>
+              <input class="form-control form-control-lg" name="id" placeholder="Ex.: 102" inputmode="numeric">
+            </div>
+            <div class="col-md-4 d-grid">
+              <button class="btn btn-sr btn-lg" type="submit">Acompanhar</button>
+            </div>
+          </div>
+          <div class="form-text text-white-60 mt-2">Dica: após finalizar, você é redirecionado automaticamente para o status.</div>
+        </form>
+
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h2 class="fw-black mb-0"><i class="bi bi-receipt-cutoff me-2"></i>Pedidos</h2>
+    <div class="text-white-60">Lista completa (últimos 200).</div>
+  </div>
+  <a class="btn btn-outline-sr" href="{{ url_for('dono_dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Voltar</a>
+</div>
+
+<div class="card card-panel shadow-soft">
+  <div class="table-responsive">
+    <table class="table table-darkish align-middle mb-0">
+      <thead>
+        <tr>
+          <th>#</th><th>Mesa</th><th>Cliente</th><th>Status</th><th>Pagamento</th><th class="text-end">Total</th><th style="width:120px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in orders %}
+          <tr>
+            <td class="fw-bold">{{ o.id }}</td>
+            <td>{{ o.table_number or "—" }}</td>
+            <td class="text-white">{{ o.customer_name }}</td>
+            <td><span class="badge text-bg-dark">{{ o.status }}</span></td>
+            <td>
+              {% if o.is_paid %}
+                <span class="badge text-bg-success">PAGO</span>
+                <span class="small text-white-60">{{ o.payment_method or "" }}</span>
+              {% else %}
+                <span class="badge text-bg-warning">PENDENTE</span>
+              {% endif %}
+            </td>
+            <td class="text-end fw-bold text-white">R$ {{ "%.2f"|format(o.total) }}</td>
+            <td class="text-end">
+              <a class="btn btn-sm btn-outline-sr" href="{{ url_for('dono_pedido_detalhe', order_id=o.id) }}">Abrir</a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

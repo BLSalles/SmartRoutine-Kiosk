@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h2 class="fw-black mb-0"><i class="bi bi-cash-register me-2"></i>Caixa • Pedido #{{ order.id }}</h2>
+    <div class="text-white-60">Mesa: <b>{{ order.table_number or "—" }}</b> • Cliente: <b>{{ order.customer_name }}</b></div>
+  </div>
+  <a class="btn btn-outline-sr" href="{{ url_for('dono_pedido_detalhe', order_id=order.id) }}"><i class="bi bi-arrow-left me-1"></i>Voltar</a>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card card-panel shadow-soft">
+      <div class="card-body">
+        <h5 class="fw-bold mb-3">Resumo</h5>
+        <ul class="list-group list-group-dark mb-3">
+          {% for it in items %}
+            <li class="list-group-item d-flex justify-content-between">
+              <div class="text-white">{{ it.qty }}x {{ it.product.name }}</div>
+              <div class="text-white-60">R$ {{ "%.2f"|format(it.unit_price * it.qty) }}</div>
+            </li>
+          {% endfor %}
+        </ul>
+        <div class="d-flex justify-content-between align-items-center">
+          <div class="fs-5 text-white-60">Total</div>
+          <div class="fs-2 fw-black text-white">R$ {{ "%.2f"|format(order.total) }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card card-panel shadow-soft">
+      <div class="card-body">
+        <h5 class="fw-bold mb-3">Cobrança</h5>
+
+        {% if order.is_paid %}
+          <div class="alert alert-success">
+            <div class="fw-bold">Pagamento já registrado</div>
+            <div>Forma: <b>{{ order.payment_method }}</b></div>
+          </div>
+        {% else %}
+          <form method="post" class="vstack gap-2">
+            <input type="hidden" name="payment_method" id="payment_method">
+            <button type="button" class="btn btn-pay btn-pay-pix" onclick="setPay('PIX')">
+              <i class="bi bi-qr-code-scan me-2"></i>PIX
+            </button>
+            <button type="button" class="btn btn-pay btn-pay-card" onclick="setPay('CARTAO')">
+              <i class="bi bi-credit-card-2-front me-2"></i>Cartão
+            </button>
+            <button type="button" class="btn btn-pay btn-pay-cash" onclick="setPay('DINHEIRO')">
+              <i class="bi bi-cash-stack me-2"></i>Dinheiro
+            </button>
+
+            <div class="small text-white-60 mt-2">Ao selecionar, o pagamento será marcado como <b>PAGO</b>.</div>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card card-panel shadow-soft mt-3">
+      <div class="card-body">
+        <div class="d-flex justify-content-between">
+          <div class="text-white-60">Status</div>
+          <div class="status-pill">{{ order.status }}</div>
+        </div>
+        <div class="d-flex justify-content-between mt-2">
+          <div class="text-white-60">Pagamento</div>
+          <div class="pay-pill {% if order.is_paid %}paid{% else %}unpaid{% endif %}">
+            {% if order.is_paid %}PAGO{% else %}PENDENTE{% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function setPay(method){
+    const ok = confirm(`Confirmar pagamento via ${method}?`);
+    if(!ok) return;
+    document.getElementById("payment_method").value = method;
+    document.forms[0].submit();
+  }
+</script>
+{% endblock %}

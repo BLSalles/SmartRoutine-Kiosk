@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h2 class="fw-black mb-0"><i class="bi bi-grid me-2"></i>Produtos</h2>
+    <div class="text-white-60">Ative/desative itens do menu.</div>
+  </div>
+  <a class="btn btn-outline-sr" href="{{ url_for('dono_dashboard') }}"><i class="bi bi-arrow-left me-1"></i>Voltar</a>
+</div>
+
+<div class="card card-panel shadow-soft">
+  <div class="table-responsive">
+    <table class="table table-darkish align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Produto</th>
+          <th>Categoria</th>
+          <th class="text-end">Preço</th>
+          <th class="text-center">Ativo</th>
+          <th style="width:140px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in products %}
+          <tr>
+            <td>
+              <div class="d-flex align-items-center gap-3">
+                {% if p.image_url %}
+                  <img src="{{ p.image_url }}" class="thumb" alt="">
+                {% endif %}
+                <div class="fw-bold text-white">{{ p.name }}</div>
+              </div>
+            </td>
+            <td class="text-white-60">{{ p.category }}</td>
+            <td class="text-end fw-bold text-white">R$ {{ "%.2f"|format(p.price) }}</td>
+            <td class="text-center">
+              {% if p.is_active %}
+                <span class="badge text-bg-success">SIM</span>
+              {% else %}
+                <span class="badge text-bg-secondary">NÃO</span>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              <form method="post" action="{{ url_for('dono_produto_toggle', product_id=p.id) }}">
+                <button class="btn btn-sm btn-outline-sr" type="submit">
+                  {% if p.is_active %}Desativar{% else %}Ativar{% endif %}
+                </button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

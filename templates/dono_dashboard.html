@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <h2 class="fw-black mb-0"><i class="bi bi-graph-up me-2"></i>Painel do Dono</h2>
+    <div class="text-white-60">Resumo financeiro (receita paga x despesas) por mês.</div>
+  </div>
+  <div class="d-flex flex-wrap gap-2">
+    <a class="btn btn-outline-sr" href="{{ url_for('dono_pedidos') }}"><i class="bi bi-receipt-cutoff me-1"></i>Pedidos</a>
+    <a class="btn btn-outline-sr" href="{{ url_for('dono_produtos') }}"><i class="bi bi-grid me-1"></i>Produtos</a>
+    <a class="btn btn-outline-sr" href="{{ url_for('dono_despesas') }}"><i class="bi bi-cash-coin me-1"></i>Despesas</a>
+  </div>
+</div>
+
+<div class="card card-panel shadow-soft mb-3">
+  <div class="card-body d-flex flex-wrap gap-3 align-items-end justify-content-between">
+    <form class="d-flex gap-2 align-items-end" method="get">
+      <div>
+        <label class="form-label mb-1">Mês</label>
+        <input class="form-control" type="month" name="mes" value="{{ month }}">
+      </div>
+      <button class="btn btn-sr" type="submit"><i class="bi bi-funnel me-1"></i>Aplicar</button>
+    </form>
+
+    <div class="d-flex flex-wrap gap-2">
+      <div class="kpi">
+        <div class="kpi-title">Receita (PAGA)</div>
+        <div class="kpi-value text-success">R$ {{ "%.2f"|format(revenue) }}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-title">Despesas</div>
+        <div class="kpi-value text-danger">R$ {{ "%.2f"|format(expenses) }}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-title">Resultado</div>
+        <div class="kpi-value text-white">R$ {{ "%.2f"|format(profit) }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <div class="card card-panel shadow-soft h-100">
+      <div class="card-body">
+        <h5 class="fw-bold mb-3">Últimos pedidos</h5>
+        <div class="table-responsive">
+          <table class="table table-darkish table-sm align-middle">
+            <thead>
+              <tr>
+                <th>#</th><th>Mesa</th><th>Cliente</th><th>Status</th><th>Pgto</th><th class="text-end">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for o in recent_orders %}
+              <tr class="row-link" onclick="window.location='{{ url_for('dono_pedido_detalhe', order_id=o.id) }}'">
+                <td class="fw-bold">{{ o.id }}</td>
+                <td>{{ o.table_number or "—" }}</td>
+                <td>{{ o.customer_name }}</td>
+                <td><span class="badge text-bg-dark">{{ o.status }}</span></td>
+                <td>
+                  {% if o.is_paid %}
+                    <span class="badge text-bg-success">PAGO</span>
+                    <span class="small text-white-60">{{ o.payment_method or "" }}</span>
+                  {% else %}
+                    <span class="badge text-bg-warning">PEND.</span>
+                  {% endif %}
+                </td>
+                <td class="text-end fw-bold">R$ {{ "%.2f"|format(o.total) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="small text-white-60">Clique em um pedido para abrir detalhes e ir para o caixa.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card card-panel shadow-soft h-100">
+      <div class="card-body">
+        <h5 class="fw-bold mb-3">Últimas despesas</h5>
+        <ul class="list-group list-group-dark">
+          {% for e in recent_expenses %}
+            <li class="list-group-item d-flex justify-content-between">
+              <div>
+                <div class="fw-bold text-white">{{ e.description }}</div>
+                <div class="small text-white-60">{{ e.date.strftime("%d/%m/%Y") }}</div>
+              </div>
+              <div class="fw-bold text-danger">R$ {{ "%.2f"|format(e.amount) }}</div>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

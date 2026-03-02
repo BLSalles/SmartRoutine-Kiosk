@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4 align-items-stretch">
+  <div class="col-lg-7">
+    <div class="card card-hero shadow-soft">
+      <div class="card-body p-4 p-lg-5">
+        <div class="badge badge-sr mb-3"><i class="bi bi-lightning-charge-fill me-1"></i>Autoatendimento</div>
+        <h1 class="display-6 fw-black mb-3">Inteligência que move o seu atendimento</h1>
+        <p class="lead text-white-60 mb-4">
+          Exemplo completo com três visões: <b>Cliente</b>, <b>Cozinha</b> e <b>Dono</b>
+          (financeiro + despesas por mês + caixa).
+        </p>
+
+        <div class="d-flex flex-wrap gap-2">
+          <a class="btn btn-sr btn-lg" href="{{ url_for('cliente_menu') }}"><i class="bi bi-shop me-1"></i>Entrar como Cliente</a>
+          <a class="btn btn-outline-sr btn-lg" href="{{ url_for('login', role='cozinha') }}"><i class="bi bi-fire me-1"></i>Painel da Cozinha</a>
+          <a class="btn btn-outline-sr btn-lg" href="{{ url_for('login', role='dono') }}"><i class="bi bi-graph-up me-1"></i>Painel do Dono</a>
+        </div>
+
+        <div class="mt-4 d-flex flex-wrap gap-2">
+          <a class="btn btn-ghost" href="{{ url_for('cliente_acompanhar') }}"><i class="bi bi-receipt me-1"></i>Acompanhar pedido</a>
+          {% if last_order_id %}
+            <a class="btn btn-ghost" href="{{ url_for('cliente_status', order_id=last_order_id) }}"><i class="bi bi-clock-history me-1"></i>Último pedido #{{ last_order_id }}</a>
+          {% endif %}
+        </div>
+
+        <hr class="my-4 border-white-10">
+        <div class="row g-3">
+          <div class="col-md-4">
+            <div class="mini-stat">
+              <div class="mini-stat-title">Cliente</div>
+              <div class="mini-stat-text">Menu + carrinho + checkout</div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="mini-stat">
+              <div class="mini-stat-title">Cozinha</div>
+              <div class="mini-stat-text">Fila + atualização de status</div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="mini-stat">
+              <div class="mini-stat-title">Dono</div>
+              <div class="mini-stat-text">Pedidos + caixa + despesas</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card card-panel shadow-soft h-100">
+      <div class="card-body p-4">
+        <h5 class="fw-bold mb-3">Credenciais (demo)</h5>
+        <div class="list-group list-group-dark">
+          <div class="list-group-item d-flex justify-content-between align-items-center">
+            <div><b>Cozinha</b><div class="small text-white-60">PIN padrão</div></div>
+            <span class="badge text-bg-dark">1234</span>
+          </div>
+          <div class="list-group-item d-flex justify-content-between align-items-center">
+            <div><b>Dono</b><div class="small text-white-60">PIN padrão</div></div>
+            <span class="badge text-bg-dark">9999</span>
+          </div>
+        </div>
+
+        <div class="alert alert-warning mt-4 mb-0">
+          <div class="fw-bold">Observação</div>
+          Isto é um <b>exemplo</b>. Para produção: autenticação real, permissões, logs e LGPD.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
