@@ -106,7 +106,7 @@ def _sync_order_payment_status(order, app: Flask):
         return False
 
 
-def _create_abacate_checkout(order, customer_email: str, cpf_digits: str, app: Flask, base_url: str):
+def _create_abacate_checkout(order, customer_email: str, customer_cellphone: str, cpf_digits: str, app: Flask, base_url: str):
     products = []
     for item in OrderItem.query.filter_by(order_id=order.id).all():
         products.append({
@@ -126,6 +126,7 @@ def _create_abacate_checkout(order, customer_email: str, cpf_digits: str, app: F
         "customer": {
             "name": order.customer_name,
             "email": customer_email,
+            "cellphone": customer_cellphone,
             "taxId": cpf_digits,
         },
         "externalId": f"pedido-{order.id}",
@@ -316,6 +317,7 @@ def create_app():
             table_number = (request.form.get("table_number") or "").strip()[:10]
             cpf_raw = (request.form.get("customer_cpf") or "").strip()
             customer_email = (request.form.get("customer_email") or "").strip()[:120]
+            customer_cellphone = "".join(ch for ch in (request.form.get("customer_cellphone") or "") if ch.isdigit())[:13]
             payment_choice = (request.form.get("payment_choice") or "CAIXA").strip().upper()
 
             cpf_digits = _normalize_cpf(cpf_raw)
@@ -368,7 +370,7 @@ def create_app():
 
             if payment_choice == "ABACATEPAY":
                 try:
-                    _create_abacate_checkout(order, customer_email, cpf_digits, app, request.host_url)
+                    _create_abacate_checkout(order, customer_email, customer_cellphone, cpf_digits, app, request.host_url)
                 except Exception as exc:
                     order.payment_gateway = None
                     order.payment_status = None
