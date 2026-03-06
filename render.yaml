@@ -16,6 +16,10 @@ services:
         fromDatabase:
           name: smartroutine-kiosk-db
           property: connectionString
+      - key: ABACATEPAY_API_KEY
+        sync: false
+      - key: ABACATEPAY_WEBHOOK_SECRET
+        sync: false
 
 databases:
   - name: smartroutine-kiosk-db

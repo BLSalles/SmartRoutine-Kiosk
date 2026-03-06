@@ -5,7 +5,7 @@
     <div class="card card-panel shadow-soft">
       <div class="card-body p-4 p-lg-5">
         <h2 class="fw-black mb-1">Checkout</h2>
-        <p class="text-white-60 mb-4">Informe seus dados para identificação do pedido.</p>
+        <p class="text-white-60 mb-4">Informe seus dados para identificação do pedido e escolha como deseja pagar.</p>
 
         <form method="post" class="vstack gap-3">
           <div>
@@ -27,13 +27,41 @@
             <input class="form-control form-control-lg" name="table_number" placeholder="Ex.: 12">
           </div>
 
+          <div>
+            <label class="form-label">Como deseja pagar?</label>
+            <div class="vstack gap-2">
+              <label class="border rounded-4 p-3 d-flex align-items-start gap-3 bg-dark-subtle border-white-10">
+                <input class="form-check-input mt-1" type="radio" name="payment_choice" value="CAIXA" checked>
+                <span>
+                  <span class="fw-bold d-block">Pagar no caixa / presencialmente</span>
+                  <span class="text-white-60 small">O pedido é enviado e o pagamento fica pendente para registrar depois.</span>
+                </span>
+              </label>
+              <label class="border rounded-4 p-3 d-flex align-items-start gap-3 bg-dark-subtle border-white-10">
+                <input class="form-check-input mt-1" type="radio" name="payment_choice" value="ABACATEPAY">
+                <span>
+                  <span class="fw-bold d-block">Pagar online com AbacatePay</span>
+                  <span class="text-white-60 small">Gera checkout com PIX e cartão.</span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <div id="emailWrap" style="display:none;">
+            <label class="form-label">E-mail para pagamento online</label>
+            <input id="emailInput" class="form-control form-control-lg" name="customer_email" type="email" placeholder="voce@exemplo.com">
+            <div class="form-text text-white-60">
+              A AbacatePay exige e-mail do cliente para criar o checkout.
+            </div>
+          </div>
+
           <div class="d-flex justify-content-between align-items-center mt-2">
             <div class="fs-5 text-white-60">Total</div>
             <div class="fs-3 fw-black text-white">R$ {{ "%.2f"|format(total) }}</div>
           </div>
 
           <button class="btn btn-sr btn-lg mt-2" type="submit">
-            <i class="bi bi-send me-1"></i>Enviar pedido
+            <i class="bi bi-send me-1"></i>Continuar
           </button>
           <a class="btn btn-ghost" href="{{ url_for('cliente_carrinho') }}">
             <i class="bi bi-arrow-left me-1"></i>Voltar
@@ -47,7 +75,6 @@
 
 {% block scripts %}
 <script>
-  // Máscara CPF: 000.000.000-00
   const cpf = document.getElementById('cpfInput');
   if(cpf){
     cpf.addEventListener('input', () => {
@@ -58,5 +85,19 @@
       else cpf.value = v;
     });
   }
+
+  const radios = document.querySelectorAll('input[name="payment_choice"]');
+  const emailWrap = document.getElementById('emailWrap');
+  const emailInput = document.getElementById('emailInput');
+
+  function syncPaymentUI(){
+    const selected = document.querySelector('input[name="payment_choice"]:checked')?.value;
+    const online = selected === 'ABACATEPAY';
+    emailWrap.style.display = online ? 'block' : 'none';
+    emailInput.required = online;
+  }
+
+  radios.forEach(r => r.addEventListener('change', syncPaymentUI));
+  syncPaymentUI();
 </script>
 {% endblock %}

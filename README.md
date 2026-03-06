@@ -38,3 +38,34 @@ Rotas:
 
 - Validação do CPF: inclui verificação dos dígitos (DV).
 - Botão 'Trocar CPF' limpa a sessão para evitar acesso por terceiros no mesmo dispositivo.
+
+
+## Pagamentos com AbacatePay
+
+Este projeto agora suporta pagamento online com AbacatePay no checkout do cliente.
+
+### O que foi adicionado
+- opção de pagar no caixa ou online
+- checkout online com PIX e cartão via AbacatePay
+- salvamento do link e do status do pagamento no pedido
+- sincronização automática do status ao abrir a tela do pedido
+- webhook `/webhooks/abacatepay` para confirmação automática
+
+### Variáveis de ambiente
+Configure estas variáveis:
+
+- `ABACATEPAY_API_KEY`: chave da API criada no dashboard
+- `ABACATEPAY_WEBHOOK_SECRET`: secret definido no webhook do dashboard
+
+### Configuração do webhook no dashboard
+Cadastre a URL abaixo na AbacatePay:
+
+`https://SEU-DOMINIO/webhooks/abacatepay?webhookSecret=SEU_SECRET`
+
+### Fluxo
+1. Cliente escolhe “Pagar online com AbacatePay”
+2. O sistema cria o pedido interno
+3. O sistema chama a API da AbacatePay e recebe a URL do checkout
+4. Cliente paga com PIX ou cartão
+5. A AbacatePay redireciona o cliente de volta e/ou envia webhook
+6. O pedido fica marcado como pago

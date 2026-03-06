@@ -1,15 +1,21 @@
 import os
 import re
-import sqlite3
+import json
+import hmac
+import base64
 import hashlib
+import sqlite3
 from datetime import datetime, date
 from decimal import Decimal
 
+import requests
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func, text, text
 
 APP_TITLE = "SmartRoutine • Kiosk"
+ABACATEPAY_API_BASE = "https://api.abacatepay.com"
+ABACATEPAY_PUBLIC_HMAC_KEY = "t9dXRhHHo3yDEj5pVDYz0frf7q6bMKyMRmxxCPIPp3RCplBfXRxqlC6ZpiWmOqj4L63qEaeUOtrCI8P0VMUgo6iIga2ri9ogaHFs0WIIywSMg0q7RmBfybe1E5XJcfC4IW3alNqym0tXoAKkzvfEjZxV6bE0oG2zJrNNYmUCKZyV0KZ3JS8Votf9EAWWYdiDkMkpbMdPggfh1EqHlVkMiTady6jOR3hyzGEHrIz2Ret0xHKMbiqkr9HS1JhNHDX9"
 
 db = SQLAlchemy()
 
@@ -46,6 +52,108 @@ def _is_valid_cpf(cpf_digits: str) -> bool:
     return cpf_digits[-2:] == d1 + d2
 
 
+def _abacate_headers(api_key: str) -> dict:
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _abacate_enabled(app: Flask) -> bool:
+    return bool(app.config.get("ABACATEPAY_API_KEY"))
+
+
+def _verify_abacate_signature(raw_body: bytes, signature_from_header: str) -> bool:
+    if not signature_from_header:
+        return False
+    expected_sig = base64.b64encode(
+        hmac.new(ABACATEPAY_PUBLIC_HMAC_KEY.encode("utf-8"), raw_body, hashlib.sha256).digest()
+    ).decode("utf-8")
+    return hmac.compare_digest(expected_sig, signature_from_header)
+
+
+def _sync_order_payment_status(order, app: Flask):
+    if not order or not order.payment_external_id or not _abacate_enabled(app):
+        return False
+
+    try:
+        res = requests.get(
+            f"{ABACATEPAY_API_BASE}/v2/checkouts/list",
+            headers=_abacate_headers(app.config["ABACATEPAY_API_KEY"]),
+            params={"id": order.payment_external_id, "limit": 1},
+            timeout=20,
+        )
+        if not res.ok:
+            return False
+        payload = res.json()
+        data = (payload or {}).get("data") or []
+        if not data:
+            return False
+        checkout = data[0]
+        status = (checkout.get("status") or "").upper()
+        order.payment_status = status or order.payment_status
+        order.payment_checkout_url = checkout.get("url") or order.payment_checkout_url
+        order.payment_receipt_url = checkout.get("receiptUrl") or order.payment_receipt_url
+        if status == "PAID" and not order.is_paid:
+            methods = checkout.get("methods") or []
+            order.is_paid = True
+            order.payment_method = (methods[0] if methods else "ABACATEPAY").upper()
+            order.paid_at = datetime.utcnow()
+        db.session.commit()
+        return True
+    except Exception:
+        db.session.rollback()
+        return False
+
+
+def _create_abacate_checkout(order, customer_email: str, cpf_digits: str, app: Flask, base_url: str):
+    products = []
+    for item in OrderItem.query.filter_by(order_id=order.id).all():
+        products.append({
+            "externalId": f"pedido-{order.id}-item-{item.product_id}",
+            "name": item.product.name,
+            "description": f"Pedido #{order.id} - {item.product.name}",
+            "quantity": int(item.qty),
+            "price": int(round(float(item.unit_price) * 100)),
+        })
+
+    payload = {
+        "frequency": "ONE_TIME",
+        "methods": ["PIX", "CARD"],
+        "products": products,
+        "returnUrl": f"{base_url.rstrip('/')}" + url_for("cliente_pagamento", order_id=order.id),
+        "completionUrl": f"{base_url.rstrip('/')}" + url_for("cliente_pagamento", order_id=order.id),
+        "customer": {
+            "name": order.customer_name,
+            "email": customer_email,
+            "taxId": cpf_digits,
+        },
+        "externalId": f"pedido-{order.id}",
+        "metadata": {
+            "order_id": str(order.id),
+            "source": "smartroutine-kiosk",
+        },
+    }
+
+    res = requests.post(
+        f"{ABACATEPAY_API_BASE}/v1/billing/create",
+        headers=_abacate_headers(app.config["ABACATEPAY_API_KEY"]),
+        data=json.dumps(payload),
+        timeout=25,
+    )
+    body = res.json() if res.content else {}
+    if not res.ok or body.get("error"):
+        raise RuntimeError(body.get("error") or f"Erro HTTP {res.status_code} ao criar checkout")
+
+    checkout = (body or {}).get("data") or {}
+    order.payment_gateway = "ABACATEPAY"
+    order.payment_external_id = checkout.get("id")
+    order.payment_checkout_url = checkout.get("url")
+    order.payment_status = checkout.get("status") or "PENDING"
+    db.session.commit()
+    return checkout
+
+
 def create_app():
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-change-me")
@@ -54,6 +162,8 @@ def create_app():
 
     # Show demo credentials only if explicitly enabled
     app.config["SHOW_DEMO_CREDENTIALS"] = os.environ.get("SHOW_DEMO_CREDENTIALS", "false").lower() in {"1", "true", "yes", "y"}
+    app.config["ABACATEPAY_API_KEY"] = os.environ.get("ABACATEPAY_API_KEY", "").strip()
+    app.config["ABACATEPAY_WEBHOOK_SECRET"] = os.environ.get("ABACATEPAY_WEBHOOK_SECRET", "").strip()
 
     # Put relative sqlite db inside instance/
     if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite:///") and "://" not in app.config["SQLALCHEMY_DATABASE_URI"][10:]:
@@ -205,6 +315,8 @@ def create_app():
             customer_name = (request.form.get("customer_name") or "").strip()[:60]
             table_number = (request.form.get("table_number") or "").strip()[:10]
             cpf_raw = (request.form.get("customer_cpf") or "").strip()
+            customer_email = (request.form.get("customer_email") or "").strip()[:120]
+            payment_choice = (request.form.get("payment_choice") or "CAIXA").strip().upper()
 
             cpf_digits = _normalize_cpf(cpf_raw)
             if not customer_name:
@@ -212,6 +324,12 @@ def create_app():
                 return redirect(url_for("cliente_checkout"))
             if not _is_valid_cpf(cpf_digits):
                 flash("Informe um CPF válido.", "danger")
+                return redirect(url_for("cliente_checkout"))
+            if payment_choice not in {"CAIXA", "ABACATEPAY"}:
+                flash("Forma de pagamento inválida.", "danger")
+                return redirect(url_for("cliente_checkout"))
+            if payment_choice == "ABACATEPAY" and (not customer_email or "@" not in customer_email):
+                flash("Para pagar online, informe um e-mail válido.", "danger")
                 return redirect(url_for("cliente_checkout"))
 
             total_dec = cart_total(cart)
@@ -227,6 +345,9 @@ def create_app():
                 is_paid=False,
                 payment_method=None,
                 paid_at=None,
+                customer_email=customer_email or None,
+                payment_gateway="ABACATEPAY" if payment_choice == "ABACATEPAY" else None,
+                payment_status="PENDING" if payment_choice == "ABACATEPAY" else None,
                 customer_cpf_hash=cpf_h,
                 customer_cpf_last4=cpf_last4,
             )
@@ -245,10 +366,25 @@ def create_app():
                 ))
             db.session.commit()
 
+            if payment_choice == "ABACATEPAY":
+                try:
+                    _create_abacate_checkout(order, customer_email, cpf_digits, app, request.host_url)
+                except Exception as exc:
+                    order.payment_gateway = None
+                    order.payment_status = None
+                    order.payment_external_id = None
+                    order.payment_checkout_url = None
+                    db.session.commit()
+                    flash(f"Pedido criado, mas não foi possível iniciar o pagamento online: {exc}", "warning")
+
             cart_set({})
             session["last_order_id"] = order.id
             session["cpf_hash"] = cpf_h
             session.modified = True
+
+            if payment_choice == "ABACATEPAY" and order.payment_checkout_url:
+                flash("Pedido criado. Agora conclua o pagamento online pela AbacatePay.", "success")
+                return redirect(url_for("cliente_pagamento", order_id=order.id))
 
             flash("Pedido enviado para a cozinha! Você pode acompanhar o andamento.", "success")
             return redirect(url_for("cliente_status", order_id=order.id))
@@ -285,6 +421,28 @@ def create_app():
         return redirect(url_for("cliente_acompanhar"))
 
 
+
+
+    @app.route("/cliente/pagamento/<int:order_id>")
+    def cliente_pagamento(order_id):
+        order = Order.query.get_or_404(order_id)
+        cpf_h = session_cpf_hash()
+        if not cpf_h or cpf_h != order.customer_cpf_hash:
+            flash("Para ver este pagamento, informe seu CPF.", "warning")
+            return redirect(url_for("cliente_acompanhar"))
+
+        _sync_order_payment_status(order, app)
+        items = OrderItem.query.filter_by(order_id=order.id).all()
+        return render_template(
+            "cliente_pagamento.html",
+            title="Pagamento online",
+            order=order,
+            items=items,
+            abacate_enabled=_abacate_enabled(app),
+            cart=cart_get(),
+            last_order_id=last_order_id(),
+        )
+
     @app.route("/cliente/pedido/<int:order_id>")
     def cliente_status(order_id):
         order = Order.query.get_or_404(order_id)
@@ -294,6 +452,7 @@ def create_app():
             flash("Para ver este pedido, informe seu CPF.", "warning")
             return redirect(url_for("cliente_acompanhar"))
 
+        _sync_order_payment_status(order, app)
         items = OrderItem.query.filter_by(order_id=order.id).all()
         return render_template("cliente_status.html", title="Status do pedido", order=order, items=items, cart=cart_get(), last_order_id=last_order_id())
 
@@ -304,13 +463,64 @@ def create_app():
         if not cpf_h or cpf_h != order.customer_cpf_hash:
             return jsonify({"error": "unauthorized"}), 403
 
+        _sync_order_payment_status(order, app)
         return jsonify({
             "id": order.id,
             "status": order.status,
             "is_paid": bool(order.is_paid),
             "payment_method": order.payment_method,
+            "payment_gateway": order.payment_gateway,
+            "payment_status": order.payment_status,
+            "payment_checkout_url": order.payment_checkout_url,
             "total": order.total,
         })
+
+
+
+    @app.route("/webhooks/abacatepay", methods=["POST"])
+    def webhook_abacatepay():
+        configured_secret = app.config.get("ABACATEPAY_WEBHOOK_SECRET")
+        request_secret = (request.args.get("webhookSecret") or "").strip()
+        if configured_secret and request_secret != configured_secret:
+            return jsonify({"error": "unauthorized"}), 401
+
+        raw_body = request.get_data() or b""
+        signature = request.headers.get("X-Webhook-Signature", "")
+        if signature and not _verify_abacate_signature(raw_body, signature):
+            return jsonify({"error": "invalid_signature"}), 401
+
+        payload = request.get_json(silent=True) or {}
+        event = payload.get("event") or ""
+        data = payload.get("data") or {}
+        checkout = data.get("checkout") or {}
+        external_id = checkout.get("externalId") or ""
+        if not external_id.startswith("pedido-"):
+            return jsonify({"ok": True}), 200
+        try:
+            order_id = int(external_id.replace("pedido-", "", 1).split("-", 1)[0])
+        except Exception:
+            return jsonify({"ok": True}), 200
+
+        order = Order.query.get(order_id)
+        if not order:
+            return jsonify({"ok": True}), 200
+
+        order.payment_gateway = "ABACATEPAY"
+        order.payment_external_id = checkout.get("id") or order.payment_external_id
+        order.payment_checkout_url = checkout.get("url") or order.payment_checkout_url
+        order.payment_receipt_url = checkout.get("receiptUrl") or order.payment_receipt_url
+        order.payment_status = checkout.get("status") or order.payment_status
+
+        if event == "checkout.completed" or (checkout.get("status") or "").upper() == "PAID":
+            if not order.is_paid:
+                order.is_paid = True
+                payer = data.get("payerInformation") or {}
+                method = payer.get("method")
+                methods = checkout.get("methods") or []
+                order.payment_method = (method or (methods[0] if methods else "ABACATEPAY")).upper()
+                order.paid_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({"ok": True}), 200
 
     # ----------------------------
     # Cozinha
@@ -499,6 +709,12 @@ class Order(db.Model):
     is_paid = db.Column(db.Boolean, default=False)
     payment_method = db.Column(db.String(20), nullable=True)
     paid_at = db.Column(db.DateTime, nullable=True)
+    customer_email = db.Column(db.String(120), nullable=True)
+    payment_gateway = db.Column(db.String(30), nullable=True)
+    payment_status = db.Column(db.String(30), nullable=True)
+    payment_external_id = db.Column(db.String(80), nullable=True, index=True)
+    payment_checkout_url = db.Column(db.String(500), nullable=True)
+    payment_receipt_url = db.Column(db.String(500), nullable=True)
 
     customer_cpf_hash = db.Column(db.String(64), nullable=True, index=True)
     customer_cpf_last4 = db.Column(db.String(4), nullable=True)
@@ -562,6 +778,18 @@ def ensure_schema_for_sqlite(db_uri: str):
         alters.append("ALTER TABLE 'order' ADD COLUMN customer_cpf_hash VARCHAR(64)")
     if "customer_cpf_last4" not in cols:
         alters.append("ALTER TABLE 'order' ADD COLUMN customer_cpf_last4 VARCHAR(4)")
+    if "customer_email" not in cols:
+        alters.append("ALTER TABLE 'order' ADD COLUMN customer_email VARCHAR(120)")
+    if "payment_gateway" not in cols:
+        alters.append("ALTER TABLE 'order' ADD COLUMN payment_gateway VARCHAR(30)")
+    if "payment_status" not in cols:
+        alters.append("ALTER TABLE 'order' ADD COLUMN payment_status VARCHAR(30)")
+    if "payment_external_id" not in cols:
+        alters.append("ALTER TABLE 'order' ADD COLUMN payment_external_id VARCHAR(80)")
+    if "payment_checkout_url" not in cols:
+        alters.append("ALTER TABLE 'order' ADD COLUMN payment_checkout_url VARCHAR(500)")
+    if "payment_receipt_url" not in cols:
+        alters.append("ALTER TABLE 'order' ADD COLUMN payment_receipt_url VARCHAR(500)")
     for sql in alters:
         try:
             cur.execute(sql)

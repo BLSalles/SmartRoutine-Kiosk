@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <div class="card card-panel shadow-soft">
+      <div class="card-body p-4 p-lg-5">
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+          <div>
+            <div class="badge badge-sr mb-2">Pedido #{{ order.id }}</div>
+            <h2 class="fw-black mb-1">Pagamento online</h2>
+            <div class="text-white-60">Cliente: {{ order.customer_name }} • CPF final {{ order.customer_cpf_last4 or '—' }}</div>
+          </div>
+          <div class="text-end">
+            <div class="small text-white-60">Status do pagamento</div>
+            <div id="payPill" class="pay-pill {% if order.is_paid %}paid{% else %}unpaid{% endif %}">
+              {% if order.is_paid %}PAGO{% else %}{{ order.payment_status or 'PENDENTE' }}{% endif %}
+            </div>
+          </div>
+        </div>
+
+        <hr class="my-4 border-white-10">
+
+        <div class="alert alert-info">
+          {% if order.is_paid %}
+            Pagamento confirmado. Seu pedido já pode ser acompanhado normalmente.
+          {% elif order.payment_checkout_url %}
+            Clique no botão abaixo para abrir o checkout da AbacatePay e pagar com PIX ou cartão.
+          {% else %}
+            O checkout ainda não foi gerado. Verifique se a chave da AbacatePay foi configurada.
+          {% endif %}
+        </div>
+
+        <ul class="list-group list-group-dark mb-4">
+          {% for it in items %}
+            <li class="list-group-item d-flex justify-content-between">
+              <div>{{ it.qty }}x {{ it.product.name }}</div>
+              <div class="text-white-60">R$ {{ "%.2f"|format(it.unit_price) }}</div>
+            </li>
+          {% endfor %}
+        </ul>
+
+        <div class="d-flex justify-content-between align-items-center mb-4">
+          <div class="fs-5 text-white-60">Total</div>
+          <div class="fs-3 fw-black">R$ {{ "%.2f"|format(order.total) }}</div>
+        </div>
+
+        <div class="d-flex flex-wrap gap-2">
+          {% if order.payment_checkout_url and not order.is_paid %}
+            <a class="btn btn-sr btn-lg" href="{{ order.payment_checkout_url }}" target="_blank" rel="noopener noreferrer">
+              <i class="bi bi-box-arrow-up-right me-1"></i>Abrir checkout AbacatePay
+            </a>
+          {% endif %}
+          <a class="btn btn-outline-sr" href="{{ url_for('cliente_status', order_id=order.id) }}">
+            <i class="bi bi-receipt me-1"></i>Ver status do pedido
+          </a>
+          <button class="btn btn-ghost" type="button" onclick="window.location.reload()">
+            <i class="bi bi-arrow-clockwise me-1"></i>Atualizar status
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

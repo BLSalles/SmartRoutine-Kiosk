@@ -15,8 +15,9 @@
             <div id="statusPill" class="status-pill">{{ order.status }}</div>
             <div class="small text-white-60 mt-2">Pagamento</div>
             <div id="payPill" class="pay-pill {% if order.is_paid %}paid{% else %}unpaid{% endif %}">
-              {% if order.is_paid %}PAGO{% else %}PENDENTE{% endif %}
+              {% if order.is_paid %}PAGO{% else %}{{ order.payment_status or "PENDENTE" }}{% endif %}
             </div>
+            {% if order.payment_gateway %}<div class="small text-white-60 mt-1">{{ order.payment_gateway }}</div>{% endif %}
           </div>
         </div>
 
@@ -39,11 +40,17 @@
 
         <div class="d-flex justify-content-between align-items-center mt-4">
   <div id="liveAlert" class="alert alert-info mb-0 flex-grow-1 me-2">
-          Esta tela atualiza automaticamente (a cada 5s).</div>
+          Esta tela atualiza automaticamente (a cada 5s).{% if order.payment_gateway == "ABACATEPAY" and not order.is_paid and order.payment_checkout_url %} Se ainda não pagou, abra o checkout online.{% endif %}</div>
   <form method="post" action="{{ url_for('cliente_sair_cpf') }}">
     <button type="submit" class="btn btn-outline-sr"><i class="bi bi-person-x me-1"></i>Trocar CPF</button>
   </form>
-</div>
+{% if order.payment_gateway == "ABACATEPAY" and order.payment_checkout_url and not order.is_paid %}
+        <div class="mt-3">
+          <a class="btn btn-sr" target="_blank" rel="noopener noreferrer" href="{{ order.payment_checkout_url }}">
+            <i class="bi bi-credit-card me-1"></i>Pagar agora com AbacatePay
+          </a>
+        </div>
+        {% endif %}
       </div>
     </div>
   </div>
@@ -72,7 +79,7 @@
         p.textContent = "PAGO" + (data.payment_method ? ` • ${data.payment_method}` : "");
         p.classList.add("paid"); p.classList.remove("unpaid");
       }else{
-        p.textContent = "PENDENTE";
+        p.textContent = data.payment_status || "PENDENTE";
         p.classList.add("unpaid"); p.classList.remove("paid");
       }
     }catch(e){}
