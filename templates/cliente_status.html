@@ -40,12 +40,7 @@
 
         <div class="d-flex justify-content-between align-items-center mt-4">
   <div id="liveAlert" class="alert alert-info mb-0 flex-grow-1 me-2">
-          {% if order.payment_gateway == "ABACATEPAY" and not order.is_paid %}
-            Esta tela atualiza automaticamente (a cada 5s). Seu pedido ainda está aguardando confirmação do pagamento para ser enviado à cozinha.
-          {% else %}
-            Esta tela atualiza automaticamente (a cada 5s).
-          {% endif %}
-          {% if order.payment_gateway == "ABACATEPAY" and not order.is_paid and order.payment_checkout_url %} Se ainda não pagou, abra o checkout online.{% endif %}</div>
+          Esta tela atualiza automaticamente (a cada 5s).{% if order.payment_gateway == "ABACATEPAY" and not order.is_paid and order.payment_checkout_url %} Seu pedido será liberado para a cozinha somente após a confirmação do pagamento. Se ainda não pagou, abra o checkout online.{% endif %}</div>
   <form method="post" action="{{ url_for('cliente_sair_cpf') }}">
     <button type="submit" class="btn btn-outline-sr"><i class="bi bi-person-x me-1"></i>Trocar CPF</button>
   </form>

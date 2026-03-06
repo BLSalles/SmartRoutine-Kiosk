@@ -72,23 +72,6 @@ def _verify_abacate_signature(raw_body: bytes, signature_from_header: str) -> bo
     return hmac.compare_digest(expected_sig, signature_from_header)
 
 
-def _mark_order_paid(order, payment_method: str | None = None, payment_status: str | None = None):
-    if payment_status:
-        order.payment_status = payment_status
-    if not order.is_paid:
-        order.is_paid = True
-        if payment_method:
-            order.payment_method = payment_method.upper()
-        elif not order.payment_method:
-            order.payment_method = "ABACATEPAY"
-        order.paid_at = datetime.utcnow()
-    elif payment_method and not order.payment_method:
-        order.payment_method = payment_method.upper()
-
-    if (order.status or "").upper() == "AGUARDANDO_PAGAMENTO":
-        order.status = "RECEBIDO"
-
-
 def _sync_order_payment_status(order, app: Flask):
     if not order or not order.payment_external_id or not _abacate_enabled(app):
         return False
@@ -111,9 +94,12 @@ def _sync_order_payment_status(order, app: Flask):
         order.payment_status = status or order.payment_status
         order.payment_checkout_url = checkout.get("url") or order.payment_checkout_url
         order.payment_receipt_url = checkout.get("receiptUrl") or order.payment_receipt_url
-        if status == "PAID":
+        if status == "PAID" and not order.is_paid:
             methods = checkout.get("methods") or []
-            _mark_order_paid(order, methods[0] if methods else "ABACATEPAY", status)
+            order.is_paid = True
+            order.payment_method = (methods[0] if methods else "ABACATEPAY").upper()
+            order.paid_at = datetime.utcnow()
+            order.status = "RECEBIDO"
         db.session.commit()
         return True
     except Exception:
@@ -121,7 +107,7 @@ def _sync_order_payment_status(order, app: Flask):
         return False
 
 
-def _create_abacate_checkout(order, customer_email: str, cpf_digits: str, app: Flask, base_url: str):
+def _create_abacate_checkout(order, customer_email: str, customer_cellphone: str, cpf_digits: str, app: Flask, base_url: str):
     products = []
     for item in OrderItem.query.filter_by(order_id=order.id).all():
         products.append({
@@ -141,6 +127,7 @@ def _create_abacate_checkout(order, customer_email: str, cpf_digits: str, app: F
         "customer": {
             "name": order.customer_name,
             "email": customer_email,
+            "cellphone": customer_cellphone,
             "taxId": cpf_digits,
         },
         "externalId": f"pedido-{order.id}",
@@ -331,6 +318,7 @@ def create_app():
             table_number = (request.form.get("table_number") or "").strip()[:10]
             cpf_raw = (request.form.get("customer_cpf") or "").strip()
             customer_email = (request.form.get("customer_email") or "").strip()[:120]
+            customer_cellphone = "".join(ch for ch in (request.form.get("customer_cellphone") or "") if ch.isdigit())[:13]
             payment_choice = (request.form.get("payment_choice") or "CAIXA").strip().upper()
 
             cpf_digits = _normalize_cpf(cpf_raw)
@@ -383,12 +371,13 @@ def create_app():
 
             if payment_choice == "ABACATEPAY":
                 try:
-                    _create_abacate_checkout(order, customer_email, cpf_digits, app, request.host_url)
+                    _create_abacate_checkout(order, customer_email, customer_cellphone, cpf_digits, app, request.host_url)
                 except Exception as exc:
                     order.payment_gateway = None
                     order.payment_status = None
                     order.payment_external_id = None
                     order.payment_checkout_url = None
+                    order.payment_receipt_url = None
                     db.session.commit()
                     flash(f"Pedido criado, mas não foi possível iniciar o pagamento online: {exc}", "warning")
 
@@ -398,10 +387,13 @@ def create_app():
             session.modified = True
 
             if payment_choice == "ABACATEPAY" and order.payment_checkout_url:
-                flash("Pagamento iniciado. O pedido só será enviado para a cozinha após a confirmação do pagamento.", "success")
+                flash("Pedido criado. Agora conclua o pagamento online pela AbacatePay.", "success")
                 return redirect(url_for("cliente_pagamento", order_id=order.id))
 
-            flash("Pedido enviado para a cozinha! Você pode acompanhar o andamento.", "success")
+            if payment_choice == "ABACATEPAY":
+                flash("Seu pedido está aguardando a confirmação do pagamento para ser liberado à cozinha.", "info")
+            else:
+                flash("Pedido enviado para a cozinha! Você pode acompanhar o andamento.", "success")
             return redirect(url_for("cliente_status", order_id=order.id))
 
         total = float(cart_total(cart))
@@ -526,11 +518,15 @@ def create_app():
         order.payment_receipt_url = checkout.get("receiptUrl") or order.payment_receipt_url
         order.payment_status = checkout.get("status") or order.payment_status
 
-        if event == "checkout.completed" or event == "billing.paid" or (checkout.get("status") or "").upper() == "PAID":
-            payer = data.get("payerInformation") or {}
-            method = payer.get("method")
-            methods = checkout.get("methods") or []
-            _mark_order_paid(order, method or (methods[0] if methods else "ABACATEPAY"), (checkout.get("status") or order.payment_status or "PAID").upper())
+        if event in {"checkout.completed", "payment.completed", "billing.paid"} or (checkout.get("status") or "").upper() == "PAID":
+            if not order.is_paid:
+                order.is_paid = True
+                payer = data.get("payerInformation") or {}
+                method = payer.get("method")
+                methods = checkout.get("methods") or []
+                order.payment_method = (method or (methods[0] if methods else "ABACATEPAY")).upper()
+                order.paid_at = datetime.utcnow()
+            order.status = "RECEBIDO"
         db.session.commit()
         return jsonify({"ok": True}), 200
 
@@ -647,6 +643,8 @@ def create_app():
             order.is_paid = True
             order.payment_method = method
             order.paid_at = datetime.utcnow()
+            if (order.status or "").upper() == "AGUARDANDO_PAGAMENTO":
+                order.status = "RECEBIDO"
             db.session.commit()
             flash(f"Pagamento registrado: {method}.", "success")
             return redirect(url_for("dono_pedido_detalhe", order_id=order.id))

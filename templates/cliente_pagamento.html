@@ -22,9 +22,9 @@
 
         <div class="alert alert-info">
           {% if order.is_paid %}
-            Pagamento confirmado. O pedido foi liberado para a cozinha e o caixa já foi atualizado.
+            Pagamento confirmado. Seu pedido foi liberado para a cozinha e já pode ser acompanhado normalmente.
           {% elif order.payment_checkout_url %}
-            Clique no botão abaixo para abrir o checkout da AbacatePay e pagar com PIX ou cartão. O pedido só vai para a cozinha após a confirmação do pagamento.
+            Clique no botão abaixo para abrir o checkout da AbacatePay e pagar com PIX ou cartão. O pedido só será liberado para a cozinha após a confirmação do pagamento.
           {% else %}
             O checkout ainda não foi gerado. Verifique se a chave da AbacatePay foi configurada.
           {% endif %}
@@ -51,7 +51,7 @@
             </a>
           {% endif %}
           <a class="btn btn-outline-sr" href="{{ url_for('cliente_status', order_id=order.id) }}">
-            <i class="bi bi-receipt me-1"></i>Ver status do pagamento/pedido
+            <i class="bi bi-receipt me-1"></i>Ver status do pedido
           </a>
           <button class="btn btn-ghost" type="button" onclick="window.location.reload()">
             <i class="bi bi-arrow-clockwise me-1"></i>Atualizar status
