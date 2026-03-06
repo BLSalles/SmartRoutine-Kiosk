@@ -747,8 +747,15 @@ def ensure_schema_for_postgres():
             'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP',
             'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS customer_cpf_hash VARCHAR(64)',
             'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS customer_cpf_last4 VARCHAR(4)',
+            'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS customer_email VARCHAR(120)',
+            'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS payment_gateway VARCHAR(30)',
+            'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30)',
+            'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS payment_external_id VARCHAR(80)',
+            'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS payment_checkout_url VARCHAR(500)',
+            'ALTER TABLE IF EXISTS "order" ADD COLUMN IF NOT EXISTS payment_receipt_url VARCHAR(500)',
             'CREATE INDEX IF NOT EXISTS ix_order_created_at ON "order" (created_at)',
             'CREATE INDEX IF NOT EXISTS ix_order_customer_cpf_hash ON "order" (customer_cpf_hash)',
+            'CREATE INDEX IF NOT EXISTS ix_order_payment_external_id ON "order" (payment_external_id)',
         ]
         for s in stmts:
             db.session.execute(text(s))
