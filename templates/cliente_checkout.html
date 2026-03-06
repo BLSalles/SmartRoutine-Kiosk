@@ -29,50 +29,29 @@
 
           <div>
             <label class="form-label">Como deseja pagar?</label>
-            <div class="payment-choice-group">
-              <label class="payment-choice-card active" data-choice-card="CAIXA">
-                <input class="form-check-input payment-choice-input" type="radio" name="payment_choice" value="CAIXA" checked>
-                <span class="payment-choice-icon"><i class="bi bi-shop"></i></span>
-                <span class="payment-choice-copy">
-                  <span class="payment-choice-title">Pagar no caixa / presencialmente</span>
-                  <span class="payment-choice-subtitle">O pedido é enviado e o pagamento fica pendente para registrar depois.</span>
+            <div class="vstack gap-2">
+              <label class="border rounded-4 p-3 d-flex align-items-start gap-3 bg-dark-subtle border-white-10">
+                <input class="form-check-input mt-1" type="radio" name="payment_choice" value="CAIXA" checked>
+                <span>
+                  <span class="fw-bold d-block">Pagar no caixa / presencialmente</span>
+                  <span class="text-white-60 small">O pedido é enviado e o pagamento fica pendente para registrar depois.</span>
                 </span>
               </label>
-              <label class="payment-choice-card" data-choice-card="ABACATEPAY">
-                <input class="form-check-input payment-choice-input" type="radio" name="payment_choice" value="ABACATEPAY">
-                <span class="payment-choice-icon"><i class="bi bi-credit-card-2-front"></i></span>
-                <span class="payment-choice-copy">
-                  <span class="payment-choice-title">Pagar online com AbacatePay</span>
-                  <span class="payment-choice-subtitle">Gera checkout com PIX e cartão.</span>
+              <label class="border rounded-4 p-3 d-flex align-items-start gap-3 bg-dark-subtle border-white-10">
+                <input class="form-check-input mt-1" type="radio" name="payment_choice" value="ABACATEPAY">
+                <span>
+                  <span class="fw-bold d-block">Pagar online com AbacatePay</span>
+                  <span class="text-white-60 small">Gera checkout com PIX e cartão.</span>
                 </span>
               </label>
             </div>
           </div>
 
-          <div id="onlinePaymentFields" class="payment-online-panel d-none">
-            <div class="payment-online-header">
-              <div>
-                <div class="payment-online-title">Dados para pagamento online</div>
-                <div class="payment-online-subtitle">Preencha exatamente como o cliente vai pagar.</div>
-              </div>
-              <span class="badge-sr">AbacatePay</span>
-            </div>
-
-            <div id="emailWrap">
-              <label class="form-label">E-mail para pagamento online</label>
-              <input id="emailInput" class="form-control form-control-lg" name="customer_email" type="email" placeholder="voce@exemplo.com" autocomplete="email">
-              <div class="form-text text-white-60">
-                A AbacatePay exige e-mail do cliente para criar o checkout.
-              </div>
-            </div>
-
-            <div id="cellphoneWrap">
-              <label class="form-label">Celular com DDD para pagamento online</label>
-              <input id="cellphoneInput" class="form-control form-control-lg" name="customer_cellphone"
-                     placeholder="(11) 99999-9999" inputmode="tel" maxlength="15" autocomplete="tel">
-              <div class="form-text text-white-60">
-                Digite com DDD. A máscara ajuda a evitar erro de preenchimento.
-              </div>
+          <div id="emailWrap" style="display:none;">
+            <label class="form-label">E-mail para pagamento online</label>
+            <input id="emailInput" class="form-control form-control-lg" name="customer_email" type="email" placeholder="voce@exemplo.com">
+            <div class="form-text text-white-60">
+              A AbacatePay exige e-mail do cliente para criar o checkout.
             </div>
           </div>
 
@@ -108,38 +87,14 @@
   }
 
   const radios = document.querySelectorAll('input[name="payment_choice"]');
-  const onlinePaymentFields = document.getElementById('onlinePaymentFields');
   const emailWrap = document.getElementById('emailWrap');
   const emailInput = document.getElementById('emailInput');
-  const cellphoneWrap = document.getElementById('cellphoneWrap');
-  const cellphoneInput = document.getElementById('cellphoneInput');
-
-  if(cellphoneInput){
-    cellphoneInput.addEventListener('input', () => {
-      let v = cellphoneInput.value.replace(/\D/g,'').slice(0,11);
-      if (v.length > 10) cellphoneInput.value = v.replace(/(\d{2})(\d{5})(\d{0,4})/, '($1) $2-$3');
-      else if (v.length > 6) cellphoneInput.value = v.replace(/(\d{2})(\d{4})(\d{0,4})/, '($1) $2-$3');
-      else if (v.length > 2) cellphoneInput.value = v.replace(/(\d{2})(\d{0,5})/, '($1) $2');
-      else cellphoneInput.value = v;
-    });
-  }
 
   function syncPaymentUI(){
     const selected = document.querySelector('input[name="payment_choice"]:checked')?.value;
     const online = selected === 'ABACATEPAY';
-
-    document.querySelectorAll('[data-choice-card]').forEach(card => {
-      card.classList.toggle('active', card.dataset.choiceCard === selected);
-    });
-
-    onlinePaymentFields.classList.toggle('d-none', !online);
+    emailWrap.style.display = online ? 'block' : 'none';
     emailInput.required = online;
-    cellphoneInput.required = online;
-
-    if (!online) {
-      emailInput.value = '';
-      cellphoneInput.value = '';
-    }
   }
 
   radios.forEach(r => r.addEventListener('change', syncPaymentUI));
