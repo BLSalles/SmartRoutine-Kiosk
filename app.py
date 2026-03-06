@@ -94,12 +94,14 @@ def _sync_order_payment_status(order, app: Flask):
         order.payment_status = status or order.payment_status
         order.payment_checkout_url = checkout.get("url") or order.payment_checkout_url
         order.payment_receipt_url = checkout.get("receiptUrl") or order.payment_receipt_url
-        if status == "PAID" and not order.is_paid:
+        if status == "PAID":
             methods = checkout.get("methods") or []
-            order.is_paid = True
-            order.payment_method = (methods[0] if methods else "ABACATEPAY").upper()
-            order.paid_at = datetime.utcnow()
-            order.status = "RECEBIDO"
+            if not order.is_paid:
+                order.is_paid = True
+                order.payment_method = (methods[0] if methods else "ABACATEPAY").upper()
+                order.paid_at = datetime.utcnow()
+            if order.status == "AGUARDANDO_PAGAMENTO":
+                order.status = "RECEBIDO"
         db.session.commit()
         return True
     except Exception:
@@ -377,7 +379,6 @@ def create_app():
                     order.payment_status = None
                     order.payment_external_id = None
                     order.payment_checkout_url = None
-                    order.payment_receipt_url = None
                     db.session.commit()
                     flash(f"Pedido criado, mas não foi possível iniciar o pagamento online: {exc}", "warning")
 
@@ -387,13 +388,10 @@ def create_app():
             session.modified = True
 
             if payment_choice == "ABACATEPAY" and order.payment_checkout_url:
-                flash("Pedido criado. Agora conclua o pagamento online pela AbacatePay.", "success")
+                flash("Pedido criado. Agora conclua o pagamento online pela AbacatePay. O pedido só vai para a cozinha após a confirmação do pagamento.", "success")
                 return redirect(url_for("cliente_pagamento", order_id=order.id))
 
-            if payment_choice == "ABACATEPAY":
-                flash("Seu pedido está aguardando a confirmação do pagamento para ser liberado à cozinha.", "info")
-            else:
-                flash("Pedido enviado para a cozinha! Você pode acompanhar o andamento.", "success")
+            flash("Pedido enviado para a cozinha! Você pode acompanhar o andamento.", "success")
             return redirect(url_for("cliente_status", order_id=order.id))
 
         total = float(cart_total(cart))
@@ -497,12 +495,22 @@ def create_app():
             return jsonify({"error": "invalid_signature"}), 401
 
         payload = request.get_json(silent=True) or {}
-        event = payload.get("event") or ""
+        event = (payload.get("event") or "").strip()
         data = payload.get("data") or {}
-        checkout = data.get("checkout") or {}
-        external_id = checkout.get("externalId") or ""
+
+        # Compatibilidade com payloads v2 (checkout/payment) e legados (billing)
+        entity = (
+            data.get("checkout")
+            or data.get("payment")
+            or data.get("billing")
+            or data
+            or {}
+        )
+
+        external_id = entity.get("externalId") or ""
         if not external_id.startswith("pedido-"):
             return jsonify({"ok": True}), 200
+
         try:
             order_id = int(external_id.replace("pedido-", "", 1).split("-", 1)[0])
         except Exception:
@@ -513,20 +521,24 @@ def create_app():
             return jsonify({"ok": True}), 200
 
         order.payment_gateway = "ABACATEPAY"
-        order.payment_external_id = checkout.get("id") or order.payment_external_id
-        order.payment_checkout_url = checkout.get("url") or order.payment_checkout_url
-        order.payment_receipt_url = checkout.get("receiptUrl") or order.payment_receipt_url
-        order.payment_status = checkout.get("status") or order.payment_status
+        order.payment_external_id = entity.get("id") or order.payment_external_id
+        order.payment_checkout_url = entity.get("url") or order.payment_checkout_url
+        order.payment_receipt_url = entity.get("receiptUrl") or order.payment_receipt_url
+        entity_status = (entity.get("status") or order.payment_status or "").upper()
+        order.payment_status = entity_status or order.payment_status
 
-        if event in {"checkout.completed", "payment.completed", "billing.paid"} or (checkout.get("status") or "").upper() == "PAID":
+        paid_events = {"checkout.completed", "payment.completed", "billing.paid"}
+        if event in paid_events or entity_status == "PAID":
             if not order.is_paid:
                 order.is_paid = True
                 payer = data.get("payerInformation") or {}
                 method = payer.get("method")
-                methods = checkout.get("methods") or []
+                methods = entity.get("methods") or []
                 order.payment_method = (method or (methods[0] if methods else "ABACATEPAY")).upper()
                 order.paid_at = datetime.utcnow()
-            order.status = "RECEBIDO"
+            if order.status == "AGUARDANDO_PAGAMENTO":
+                order.status = "RECEBIDO"
+
         db.session.commit()
         return jsonify({"ok": True}), 200
 
@@ -643,8 +655,6 @@ def create_app():
             order.is_paid = True
             order.payment_method = method
             order.paid_at = datetime.utcnow()
-            if (order.status or "").upper() == "AGUARDANDO_PAGAMENTO":
-                order.status = "RECEBIDO"
             db.session.commit()
             flash(f"Pagamento registrado: {method}.", "success")
             return redirect(url_for("dono_pedido_detalhe", order_id=order.id))

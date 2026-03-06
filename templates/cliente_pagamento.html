@@ -22,9 +22,9 @@
 
         <div class="alert alert-info">
           {% if order.is_paid %}
-            Pagamento confirmado. Seu pedido foi liberado para a cozinha e já pode ser acompanhado normalmente.
+            Pagamento confirmado. Seu pedido já pode ser acompanhado normalmente.
           {% elif order.payment_checkout_url %}
-            Clique no botão abaixo para abrir o checkout da AbacatePay e pagar com PIX ou cartão. O pedido só será liberado para a cozinha após a confirmação do pagamento.
+            Clique no botão abaixo para abrir o checkout da AbacatePay e pagar com PIX ou cartão.
           {% else %}
             O checkout ainda não foi gerado. Verifique se a chave da AbacatePay foi configurada.
           {% endif %}
