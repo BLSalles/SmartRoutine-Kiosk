@@ -12,7 +12,7 @@ from decimal import Decimal
 import requests
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, current_app
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func, text, text
+from sqlalchemy import func, text
 
 APP_TITLE = "SmartRoutine • Kiosk"
 ABACATEPAY_API_BASE = "https://api.abacatepay.com"
@@ -77,7 +77,13 @@ def _apply_paid_state(order, entity: dict | None = None):
     entity = entity or {}
     methods = entity.get("methods") or []
     payer = entity.get("payerInformation") or entity.get("payer_information") or {}
-    method = payer.get("method") or entity.get("method") or (methods[0] if methods else "ABACATEPAY")
+    payment = entity.get("payment") or {}
+    method = (
+        payer.get("method")
+        or payment.get("method")
+        or entity.get("method")
+        or (methods[0] if methods else "ABACATEPAY")
+    )
     order.payment_gateway = "ABACATEPAY"
     order.is_paid = True
     order.payment_status = "PAID"
@@ -90,6 +96,67 @@ def _apply_paid_state(order, entity: dict | None = None):
     order.payment_receipt_url = entity.get("receiptUrl") or entity.get("receipt_url") or order.payment_receipt_url
     order.payment_external_id = entity.get("id") or order.payment_external_id
 
+
+
+
+def _extract_order_id_from_external_id(value: str | None):
+    ext = str(value or "").strip()
+    if not ext.startswith("pedido-"):
+        return None
+    m = re.match(r"pedido-(\d+)(?:-|$)", ext)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+
+def _find_order_from_abacate_payload(entity: dict | None = None, data: dict | None = None, metadata: dict | None = None):
+    entity = entity or {}
+    data = data or {}
+    metadata = metadata or {}
+
+    candidates = [
+        entity.get("externalId"),
+        data.get("externalId"),
+        metadata.get("externalId"),
+        metadata.get("order_external_id"),
+    ]
+    for candidate in candidates:
+        order_id = _extract_order_id_from_external_id(candidate)
+        if order_id:
+            order = Order.query.get(order_id)
+            if order:
+                return order
+
+    metadata_order_id = metadata.get("order_id") or metadata.get("orderId") or data.get("order_id") or data.get("orderId")
+    if metadata_order_id:
+        try:
+            order = Order.query.get(int(str(metadata_order_id).strip()))
+            if order:
+                return order
+        except Exception:
+            pass
+
+    entity_id = entity.get("id") or data.get("id")
+    if entity_id:
+        order = Order.query.filter_by(payment_external_id=entity_id).first()
+        if order:
+            return order
+
+    products = entity.get("products") or data.get("products") or []
+    if isinstance(products, list):
+        for product in products:
+            if not isinstance(product, dict):
+                continue
+            order_id = _extract_order_id_from_external_id(product.get("externalId"))
+            if order_id:
+                order = Order.query.get(order_id)
+                if order:
+                    return order
+
+    return None
 
 def _apply_cancelled_state(order, status: str = "CANCELLED"):
     order.payment_gateway = "ABACATEPAY"
@@ -633,28 +700,8 @@ def create_app():
         )
         metadata = entity.get("metadata") or data.get("metadata") or {}
 
-        order = None
         external_id = (entity.get("externalId") or data.get("externalId") or metadata.get("externalId") or "").strip()
-        if external_id.startswith("pedido-"):
-            try:
-                order_id = int(external_id.replace("pedido-", "", 1).split("-", 1)[0])
-                order = Order.query.get(order_id)
-            except Exception:
-                order = None
-
-        if not order:
-            metadata_order_id = metadata.get("order_id") or metadata.get("orderId") or data.get("order_id") or data.get("orderId")
-            if metadata_order_id:
-                try:
-                    order = Order.query.get(int(str(metadata_order_id).strip()))
-                except Exception:
-                    order = None
-
-        if not order and entity.get("id"):
-            order = Order.query.filter_by(payment_external_id=entity.get("id")).first()
-
-        if not order and external_id:
-            order = Order.query.filter_by(payment_external_id=external_id).first()
+        order = _find_order_from_abacate_payload(entity=entity, data=data, metadata=metadata)
 
         if not order:
             logger = current_app.logger if current_app else app.logger
@@ -668,10 +715,11 @@ def create_app():
             )
             return jsonify({"ok": True}), 200
 
+        merged_entity = {**entity, **(data if isinstance(data, dict) else {})}
         order.payment_gateway = "ABACATEPAY"
-        order.payment_external_id = entity.get("id") or order.payment_external_id
-        order.payment_checkout_url = entity.get("url") or order.payment_checkout_url
-        order.payment_receipt_url = entity.get("receiptUrl") or entity.get("receipt_url") or order.payment_receipt_url
+        order.payment_external_id = entity.get("id") or data.get("id") or order.payment_external_id
+        order.payment_checkout_url = entity.get("url") or data.get("url") or order.payment_checkout_url
+        order.payment_receipt_url = entity.get("receiptUrl") or entity.get("receipt_url") or data.get("receiptUrl") or data.get("receipt_url") or order.payment_receipt_url
         entity_status = (entity.get("status") or data.get("status") or order.payment_status or "").upper()
         if event == "billing.paid" and not entity_status:
             entity_status = "PAID"
@@ -679,7 +727,7 @@ def create_app():
 
         paid_events = {"checkout.completed", "payment.completed", "billing.paid"}
         if event in paid_events or entity_status == "PAID":
-            _apply_paid_state(order, {**entity, **(data if isinstance(data, dict) else {})})
+            _apply_paid_state(order, merged_entity)
         elif entity_status in {"EXPIRED", "CANCELLED", "CANCELED"} and not order.is_paid:
             _apply_cancelled_state(order, "CANCELLED" if entity_status in {"CANCELLED", "CANCELED"} else "EXPIRED")
 
