@@ -63,6 +63,39 @@ def _abacate_headers(api_key: str) -> dict:
 def _abacate_enabled(app: Flask) -> bool:
     return bool(app.config.get("ABACATEPAY_API_KEY"))
 
+def _safe_order_get(order_id):
+    try:
+        oid = int(order_id)
+    except Exception:
+        return None
+    try:
+        return db.session.get(Order, oid)
+    except Exception:
+        return Order.query.get(oid)
+
+
+def _normalize_abacate_entity(data):
+    """
+    Normaliza payloads da AbacatePay para um formato único.
+    Aceita respostas como {"billing": {...}, "payment": {...}} ou objetos diretos.
+    """
+    if not isinstance(data, dict):
+        return {}
+    if isinstance(data.get("billing"), dict):
+        billing = dict(data.get("billing") or {})
+        payment = data.get("payment") or {}
+        if isinstance(payment, dict):
+            billing["payment"] = payment
+        if data.get("url") and not billing.get("url"):
+            billing["url"] = data.get("url")
+        if data.get("receiptUrl") and not billing.get("receiptUrl"):
+            billing["receiptUrl"] = data.get("receiptUrl")
+        if data.get("receipt_url") and not billing.get("receipt_url"):
+            billing["receipt_url"] = data.get("receipt_url")
+        return billing
+    return data
+
+
 
 def _verify_abacate_signature(raw_body: bytes, signature_from_header: str) -> bool:
     if not signature_from_header:
@@ -74,7 +107,7 @@ def _verify_abacate_signature(raw_body: bytes, signature_from_header: str) -> bo
 
 
 def _apply_paid_state(order, entity: dict | None = None):
-    entity = entity or {}
+    entity = _normalize_abacate_entity(entity or {})
     methods = entity.get("methods") or []
     payer = entity.get("payerInformation") or entity.get("payer_information") or {}
     payment = entity.get("payment") or {}
@@ -113,7 +146,7 @@ def _extract_order_id_from_external_id(value: str | None):
 
 
 def _find_order_from_abacate_payload(entity: dict | None = None, data: dict | None = None, metadata: dict | None = None):
-    entity = entity or {}
+    entity = _normalize_abacate_entity(entity or {})
     data = data or {}
     metadata = metadata or {}
 
@@ -126,18 +159,15 @@ def _find_order_from_abacate_payload(entity: dict | None = None, data: dict | No
     for candidate in candidates:
         order_id = _extract_order_id_from_external_id(candidate)
         if order_id:
-            order = Order.query.get(order_id)
+            order = _safe_order_get(order_id)
             if order:
                 return order
 
     metadata_order_id = metadata.get("order_id") or metadata.get("orderId") or data.get("order_id") or data.get("orderId")
     if metadata_order_id:
-        try:
-            order = Order.query.get(int(str(metadata_order_id).strip()))
-            if order:
-                return order
-        except Exception:
-            pass
+        order = _safe_order_get(metadata_order_id)
+        if order:
+            return order
 
     entity_id = entity.get("id") or data.get("id")
     if entity_id:
@@ -152,15 +182,48 @@ def _find_order_from_abacate_payload(entity: dict | None = None, data: dict | No
                 continue
             order_id = _extract_order_id_from_external_id(product.get("externalId"))
             if order_id:
-                order = Order.query.get(order_id)
+                order = _safe_order_get(order_id)
                 if order:
                     return order
 
+    payload_blob = json.dumps({"entity": entity, "data": data, "metadata": metadata}, ensure_ascii=False)
+    matches = re.findall(r"pedido-(\d+)(?:-|\b)", payload_blob)
+    for match in matches:
+        order = _safe_order_get(match)
+        if order:
+            return order
+
+    customer_md = ((entity.get("customer") or {}).get("metadata") or {})
+    customer_email = (customer_md.get("email") or "").strip().lower()
+    customer_name = (customer_md.get("name") or "").strip().lower()
+    amount_cents = entity.get("amount") or data.get("amount")
+    try:
+        amount_value = (float(amount_cents) / 100.0) if amount_cents is not None else None
+    except Exception:
+        amount_value = None
+
+    if amount_value is not None:
+        q = (
+            Order.query
+            .filter(Order.status == "AGUARDANDO_PAGAMENTO")
+            .filter(Order.payment_gateway == "ABACATEPAY")
+            .order_by(Order.created_at.desc())
+        )
+        for candidate in q.limit(20).all():
+            if abs(float(candidate.total or 0) - float(amount_value)) > 0.01:
+                continue
+            email_ok = (customer_email and (candidate.customer_email or "").strip().lower() == customer_email)
+            name_ok = (customer_name and (candidate.customer_name or "").strip().lower() == customer_name)
+            if customer_email and email_ok:
+                return candidate
+            if customer_name and name_ok:
+                return candidate
+
     return None
 
-def _apply_cancelled_state(order, status: str = "CANCELLED"):
+def _apply_cancelled_state(order, status: str = "CANCELADO"):
     order.payment_gateway = "ABACATEPAY"
-    order.payment_status = status or "CANCELLED"
+    order.payment_status = status or "CANCELADO"
     if not order.is_paid and order.status == "AGUARDANDO_PAGAMENTO":
         order.status = "CANCELADO"
 
@@ -172,10 +235,10 @@ def _fetch_abacate_entity(order, app: Flask):
     headers = _abacate_headers(app.config["ABACATEPAY_API_KEY"])
     lookup_params = []
     if order.payment_external_id:
-        lookup_params.append((f"{ABACATEPAY_API_BASE}/v2/checkouts/list", {"id": order.payment_external_id, "limit": 1}))
         lookup_params.append((f"{ABACATEPAY_API_BASE}/v1/billing/list", {"id": order.payment_external_id}))
-    lookup_params.append((f"{ABACATEPAY_API_BASE}/v2/checkouts/list", {"externalId": f"pedido-{order.id}", "limit": 1}))
+        lookup_params.append((f"{ABACATEPAY_API_BASE}/v2/checkouts/list", {"id": order.payment_external_id, "limit": 1}))
     lookup_params.append((f"{ABACATEPAY_API_BASE}/v1/billing/list", {"externalId": f"pedido-{order.id}"}))
+    lookup_params.append((f"{ABACATEPAY_API_BASE}/v2/checkouts/list", {"externalId": f"pedido-{order.id}", "limit": 1}))
 
     for url, params in lookup_params:
         try:
@@ -187,11 +250,14 @@ def _fetch_abacate_entity(order, app: Flask):
         body = res.json() if res.content else {}
         data = (body or {}).get("data") or []
         if isinstance(data, dict):
-            return True, data
+            entity = _normalize_abacate_entity(data)
+            if entity:
+                return True, entity
         if isinstance(data, list) and data:
-            return True, data[0]
+            entity = _normalize_abacate_entity(data[0])
+            if entity:
+                return True, entity
     return False, None
-
 
 def _sync_order_payment_status(order, app: Flask):
     if not order or order.payment_gateway != "ABACATEPAY" or not _abacate_enabled(app):
@@ -211,7 +277,7 @@ def _sync_order_payment_status(order, app: Flask):
         if status == "PAID":
             _apply_paid_state(order, entity)
         elif status in {"EXPIRED", "CANCELLED", "CANCELED"} and not order.is_paid:
-            _apply_cancelled_state(order, "CANCELLED" if status in {"CANCELLED", "CANCELED"} else "EXPIRED")
+            _apply_cancelled_state(order, "CANCELADO")
 
         db.session.commit()
         return True
@@ -249,16 +315,16 @@ def _reconcile_pending_abacate_orders(app: Flask, limit: int = 30):
                     updated += 1
                     continue
                 if status in {"EXPIRED", "CANCELLED", "CANCELED"}:
-                    _apply_cancelled_state(order, "CANCELLED" if status in {"CANCELLED", "CANCELED"} else "EXPIRED")
+                    _apply_cancelled_state(order, "CANCELADO")
                     updated += 1
                     continue
                 if order.created_at <= cutoff and status in {"", "PENDING"}:
-                    _apply_cancelled_state(order, "EXPIRED")
+                    _apply_cancelled_state(order, "CANCELADO")
                     updated += 1
                     continue
             elif order.created_at <= cutoff and not order.is_paid:
                 # Fail-safe local expiration when the pending window has passed.
-                _apply_cancelled_state(order, "EXPIRED")
+                _apply_cancelled_state(order, "CANCELADO")
                 updated += 1
         except Exception:
             db.session.rollback()
@@ -315,7 +381,8 @@ def _create_abacate_checkout(order, customer_email: str, customer_cellphone: str
     order.payment_gateway = "ABACATEPAY"
     order.payment_external_id = checkout.get("id")
     order.payment_checkout_url = checkout.get("url")
-    order.payment_status = checkout.get("status") or "PENDING"
+    order.payment_status = (checkout.get("status") or "PENDING").upper()
+    order.payment_method = "ABACATEPAY"
     db.session.commit()
     return checkout
 
@@ -691,7 +758,7 @@ def create_app():
         data = payload.get("data") or {}
 
         # Compatibilidade com payloads v2 (checkout/payment) e legados (billing)
-        entity = (
+        entity = _normalize_abacate_entity(
             data.get("checkout")
             or data.get("payment")
             or data.get("billing")
@@ -706,11 +773,12 @@ def create_app():
         if not order:
             logger = current_app.logger if current_app else app.logger
             logger.warning(
-                "AbacatePay webhook sem pedido correspondente. event=%s entity_id=%s external_id=%s metadata=%s payload=%s",
+                "AbacatePay webhook sem pedido correspondente. event=%s entity_id=%s external_id=%s metadata=%s product_external_ids=%s payload=%s",
                 event,
                 entity.get("id"),
                 external_id,
                 metadata,
+                [p.get("externalId") for p in (entity.get("products") or []) if isinstance(p, dict)],
                 payload,
             )
             return jsonify({"ok": True}), 200
