@@ -10,7 +10,7 @@ from datetime import datetime, date, timedelta
 from decimal import Decimal
 
 import requests
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, current_app
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func, text, text
 
@@ -319,6 +319,31 @@ def create_app():
     def session_cpf_hash():
         return session.get("cpf_hash")
 
+    def maybe_reconcile_pending_orders(force: bool = False):
+        if not _abacate_enabled(app):
+            return 0
+        now = time.time()
+        last_run = float(app.config.get("LAST_ABACATE_RECONCILE_AT", 0.0) or 0.0)
+        if not force and now - last_run < 20:
+            return 0
+        try:
+            updated = _reconcile_pending_abacate_orders(app, limit=50)
+            app.config["LAST_ABACATE_RECONCILE_AT"] = now
+            return updated
+        except Exception:
+            db.session.rollback()
+            return 0
+
+    @app.before_request
+    def run_pending_abacate_reconcile():
+        path = (request.path or "")
+        if path.startswith("/static/") or path == "/favicon.ico":
+            return None
+        if path.startswith("/webhooks/abacatepay"):
+            return None
+        maybe_reconcile_pending_orders()
+        return None
+
     # ----------------------------
     # Landing / auth
     # ----------------------------
@@ -533,6 +558,7 @@ def create_app():
             flash("Para ver este pagamento, informe seu CPF.", "warning")
             return redirect(url_for("cliente_acompanhar"))
 
+        maybe_reconcile_pending_orders(force=True)
         _sync_order_payment_status(order, app)
         items = OrderItem.query.filter_by(order_id=order.id).all()
         return render_template(
@@ -554,6 +580,7 @@ def create_app():
             flash("Para ver este pedido, informe seu CPF.", "warning")
             return redirect(url_for("cliente_acompanhar"))
 
+        maybe_reconcile_pending_orders(force=True)
         _sync_order_payment_status(order, app)
         items = OrderItem.query.filter_by(order_id=order.id).all()
         return render_template("cliente_status.html", title="Status do pedido", order=order, items=items, cart=cart_get(), last_order_id=last_order_id())
@@ -565,6 +592,7 @@ def create_app():
         if not cpf_h or cpf_h != order.customer_cpf_hash:
             return jsonify({"error": "unauthorized"}), 403
 
+        maybe_reconcile_pending_orders(force=True)
         _sync_order_payment_status(order, app)
         return jsonify({
             "id": order.id,
@@ -625,8 +653,19 @@ def create_app():
         if not order and entity.get("id"):
             order = Order.query.filter_by(payment_external_id=entity.get("id")).first()
 
+        if not order and external_id:
+            order = Order.query.filter_by(payment_external_id=external_id).first()
+
         if not order:
-            current_app.logger.warning("AbacatePay webhook sem pedido correspondente. event=%s payload=%s", event, payload)
+            logger = current_app.logger if current_app else app.logger
+            logger.warning(
+                "AbacatePay webhook sem pedido correspondente. event=%s entity_id=%s external_id=%s metadata=%s payload=%s",
+                event,
+                entity.get("id"),
+                external_id,
+                metadata,
+                payload,
+            )
             return jsonify({"ok": True}), 200
 
         order.payment_gateway = "ABACATEPAY"
@@ -644,7 +683,11 @@ def create_app():
         elif entity_status in {"EXPIRED", "CANCELLED", "CANCELED"} and not order.is_paid:
             _apply_cancelled_state(order, "CANCELLED" if entity_status in {"CANCELLED", "CANCELED"} else "EXPIRED")
 
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise
         return jsonify({"ok": True}), 200
 
     # ----------------------------
