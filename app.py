@@ -506,33 +506,47 @@ def create_app():
             or data
             or {}
         )
+        metadata = entity.get("metadata") or data.get("metadata") or {}
 
-        external_id = entity.get("externalId") or ""
-        if not external_id.startswith("pedido-"):
-            return jsonify({"ok": True}), 200
+        order = None
+        external_id = (entity.get("externalId") or data.get("externalId") or metadata.get("externalId") or "").strip()
+        if external_id.startswith("pedido-"):
+            try:
+                order_id = int(external_id.replace("pedido-", "", 1).split("-", 1)[0])
+                order = Order.query.get(order_id)
+            except Exception:
+                order = None
 
-        try:
-            order_id = int(external_id.replace("pedido-", "", 1).split("-", 1)[0])
-        except Exception:
-            return jsonify({"ok": True}), 200
-
-        order = Order.query.get(order_id)
         if not order:
+            metadata_order_id = metadata.get("order_id") or metadata.get("orderId") or data.get("order_id") or data.get("orderId")
+            if metadata_order_id:
+                try:
+                    order = Order.query.get(int(str(metadata_order_id).strip()))
+                except Exception:
+                    order = None
+
+        if not order and entity.get("id"):
+            order = Order.query.filter_by(payment_external_id=entity.get("id")).first()
+
+        if not order:
+            current_app.logger.warning("AbacatePay webhook sem pedido correspondente. event=%s payload=%s", event, payload)
             return jsonify({"ok": True}), 200
 
         order.payment_gateway = "ABACATEPAY"
         order.payment_external_id = entity.get("id") or order.payment_external_id
         order.payment_checkout_url = entity.get("url") or order.payment_checkout_url
-        order.payment_receipt_url = entity.get("receiptUrl") or order.payment_receipt_url
-        entity_status = (entity.get("status") or order.payment_status or "").upper()
+        order.payment_receipt_url = entity.get("receiptUrl") or entity.get("receipt_url") or order.payment_receipt_url
+        entity_status = (entity.get("status") or data.get("status") or order.payment_status or "").upper()
+        if event == "billing.paid" and not entity_status:
+            entity_status = "PAID"
         order.payment_status = entity_status or order.payment_status
 
         paid_events = {"checkout.completed", "payment.completed", "billing.paid"}
         if event in paid_events or entity_status == "PAID":
             if not order.is_paid:
                 order.is_paid = True
-                payer = data.get("payerInformation") or {}
-                method = payer.get("method")
+                payer = data.get("payerInformation") or data.get("payer_information") or {}
+                method = payer.get("method") or entity.get("method")
                 methods = entity.get("methods") or []
                 order.payment_method = (method or (methods[0] if methods else "ABACATEPAY")).upper()
                 order.paid_at = datetime.utcnow()
