@@ -5,7 +5,8 @@ import hmac
 import base64
 import hashlib
 import sqlite3
-from datetime import datetime, date
+import time
+from datetime import datetime, date, timedelta
 from decimal import Decimal
 
 import requests
@@ -72,41 +73,135 @@ def _verify_abacate_signature(raw_body: bytes, signature_from_header: str) -> bo
     return hmac.compare_digest(expected_sig, signature_from_header)
 
 
+def _apply_paid_state(order, entity: dict | None = None):
+    entity = entity or {}
+    methods = entity.get("methods") or []
+    payer = entity.get("payerInformation") or entity.get("payer_information") or {}
+    method = payer.get("method") or entity.get("method") or (methods[0] if methods else "ABACATEPAY")
+    order.payment_gateway = "ABACATEPAY"
+    order.is_paid = True
+    order.payment_status = "PAID"
+    order.payment_method = (method or "ABACATEPAY").upper()
+    if not order.paid_at:
+        order.paid_at = datetime.utcnow()
+    if order.status == "AGUARDANDO_PAGAMENTO":
+        order.status = "RECEBIDO"
+    order.payment_checkout_url = entity.get("url") or order.payment_checkout_url
+    order.payment_receipt_url = entity.get("receiptUrl") or entity.get("receipt_url") or order.payment_receipt_url
+    order.payment_external_id = entity.get("id") or order.payment_external_id
+
+
+def _apply_cancelled_state(order, status: str = "CANCELLED"):
+    order.payment_gateway = "ABACATEPAY"
+    order.payment_status = status or "CANCELLED"
+    if not order.is_paid and order.status == "AGUARDANDO_PAGAMENTO":
+        order.status = "CANCELADO"
+
+
+def _fetch_abacate_entity(order, app: Flask):
+    if not order or not _abacate_enabled(app):
+        return False, None
+
+    headers = _abacate_headers(app.config["ABACATEPAY_API_KEY"])
+    lookup_params = []
+    if order.payment_external_id:
+        lookup_params.append((f"{ABACATEPAY_API_BASE}/v2/checkouts/list", {"id": order.payment_external_id, "limit": 1}))
+        lookup_params.append((f"{ABACATEPAY_API_BASE}/v1/billing/list", {"id": order.payment_external_id}))
+    lookup_params.append((f"{ABACATEPAY_API_BASE}/v2/checkouts/list", {"externalId": f"pedido-{order.id}", "limit": 1}))
+    lookup_params.append((f"{ABACATEPAY_API_BASE}/v1/billing/list", {"externalId": f"pedido-{order.id}"}))
+
+    for url, params in lookup_params:
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=20)
+        except Exception:
+            continue
+        if not res.ok:
+            continue
+        body = res.json() if res.content else {}
+        data = (body or {}).get("data") or []
+        if isinstance(data, dict):
+            return True, data
+        if isinstance(data, list) and data:
+            return True, data[0]
+    return False, None
+
+
 def _sync_order_payment_status(order, app: Flask):
-    if not order or not order.payment_external_id or not _abacate_enabled(app):
+    if not order or order.payment_gateway != "ABACATEPAY" or not _abacate_enabled(app):
         return False
 
     try:
-        res = requests.get(
-            f"{ABACATEPAY_API_BASE}/v2/checkouts/list",
-            headers=_abacate_headers(app.config["ABACATEPAY_API_KEY"]),
-            params={"id": order.payment_external_id, "limit": 1},
-            timeout=20,
-        )
-        if not res.ok:
+        found, entity = _fetch_abacate_entity(order, app)
+        if not found:
             return False
-        payload = res.json()
-        data = (payload or {}).get("data") or []
-        if not data:
-            return False
-        checkout = data[0]
-        status = (checkout.get("status") or "").upper()
+
+        status = ((entity or {}).get("status") or "").upper()
         order.payment_status = status or order.payment_status
-        order.payment_checkout_url = checkout.get("url") or order.payment_checkout_url
-        order.payment_receipt_url = checkout.get("receiptUrl") or order.payment_receipt_url
+        order.payment_checkout_url = (entity or {}).get("url") or order.payment_checkout_url
+        order.payment_receipt_url = (entity or {}).get("receiptUrl") or (entity or {}).get("receipt_url") or order.payment_receipt_url
+        order.payment_external_id = (entity or {}).get("id") or order.payment_external_id
+
         if status == "PAID":
-            methods = checkout.get("methods") or []
-            if not order.is_paid:
-                order.is_paid = True
-                order.payment_method = (methods[0] if methods else "ABACATEPAY").upper()
-                order.paid_at = datetime.utcnow()
-            if order.status == "AGUARDANDO_PAGAMENTO":
-                order.status = "RECEBIDO"
+            _apply_paid_state(order, entity)
+        elif status in {"EXPIRED", "CANCELLED", "CANCELED"} and not order.is_paid:
+            _apply_cancelled_state(order, "CANCELLED" if status in {"CANCELLED", "CANCELED"} else "EXPIRED")
+
         db.session.commit()
         return True
     except Exception:
         db.session.rollback()
         return False
+
+
+def _reconcile_pending_abacate_orders(app: Flask, limit: int = 30):
+    if not _abacate_enabled(app):
+        return 0
+
+    timeout_minutes = int(os.environ.get("ABACATEPAY_PENDING_TIMEOUT_MINUTES", "10") or "10")
+    cutoff = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+    pending_orders = (
+        Order.query
+        .filter_by(payment_gateway="ABACATEPAY")
+        .filter(Order.status == "AGUARDANDO_PAGAMENTO")
+        .order_by(Order.created_at.asc())
+        .limit(limit)
+        .all()
+    )
+    updated = 0
+    for order in pending_orders:
+        try:
+            found, entity = _fetch_abacate_entity(order, app)
+            if found and entity:
+                status = (entity.get("status") or "").upper()
+                order.payment_status = status or order.payment_status
+                order.payment_checkout_url = entity.get("url") or order.payment_checkout_url
+                order.payment_receipt_url = entity.get("receiptUrl") or entity.get("receipt_url") or order.payment_receipt_url
+                order.payment_external_id = entity.get("id") or order.payment_external_id
+                if status == "PAID":
+                    _apply_paid_state(order, entity)
+                    updated += 1
+                    continue
+                if status in {"EXPIRED", "CANCELLED", "CANCELED"}:
+                    _apply_cancelled_state(order, "CANCELLED" if status in {"CANCELLED", "CANCELED"} else "EXPIRED")
+                    updated += 1
+                    continue
+                if order.created_at <= cutoff and status in {"", "PENDING"}:
+                    _apply_cancelled_state(order, "EXPIRED")
+                    updated += 1
+                    continue
+            elif order.created_at <= cutoff and not order.is_paid:
+                # Fail-safe local expiration when the pending window has passed.
+                _apply_cancelled_state(order, "EXPIRED")
+                updated += 1
+        except Exception:
+            db.session.rollback()
+    if updated:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            return 0
+    return updated
 
 
 def _create_abacate_checkout(order, customer_email: str, customer_cellphone: str, cpf_digits: str, app: Flask, base_url: str):
@@ -178,6 +273,8 @@ def create_app():
     # Normalize postgres scheme
     if app.config["SQLALCHEMY_DATABASE_URI"].startswith("postgres://"):
         app.config["SQLALCHEMY_DATABASE_URI"] = app.config["SQLALCHEMY_DATABASE_URI"].replace("postgres://", "postgresql://", 1)
+
+    app.config["LAST_ABACATE_RECONCILE_AT"] = 0.0
 
     db.init_app(app)
 
@@ -543,15 +640,9 @@ def create_app():
 
         paid_events = {"checkout.completed", "payment.completed", "billing.paid"}
         if event in paid_events or entity_status == "PAID":
-            if not order.is_paid:
-                order.is_paid = True
-                payer = data.get("payerInformation") or data.get("payer_information") or {}
-                method = payer.get("method") or entity.get("method")
-                methods = entity.get("methods") or []
-                order.payment_method = (method or (methods[0] if methods else "ABACATEPAY")).upper()
-                order.paid_at = datetime.utcnow()
-            if order.status == "AGUARDANDO_PAGAMENTO":
-                order.status = "RECEBIDO"
+            _apply_paid_state(order, {**entity, **(data if isinstance(data, dict) else {})})
+        elif entity_status in {"EXPIRED", "CANCELLED", "CANCELED"} and not order.is_paid:
+            _apply_cancelled_state(order, "CANCELLED" if entity_status in {"CANCELLED", "CANCELED"} else "EXPIRED")
 
         db.session.commit()
         return jsonify({"ok": True}), 200
